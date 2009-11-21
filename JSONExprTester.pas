@@ -268,10 +268,12 @@ begin
       Msg:=Msg+#13#10+(mstr+#13#10'EvalNumber failed! =>'#9+J.toString);
     end
     else begin
-      Msg:=Msg+#13#10+(mstr+#13#10'EvalNumber =>'#9+J.toString);
       f2:=((3*16) xor 32)+0.5;
       if f<>f2 then
+      begin
+        Result:=false;
         Msg:=Msg+#13#10+(Format('%s'#13#10'=>'#13#10'%s'#13#10'=> %f  !=  (%f)',[mstr,J.toString,f,f2]));
+      end;
     end;
     J.Free;
     mstr:='X+2 in (null,2<>3,2+3*1)';
@@ -279,6 +281,7 @@ begin
     v:=Eval(J);
     if not v then
     begin
+      Result:=false;
       Msg:=Msg+#13#10+(mstr+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
     end;
     J.Free;
@@ -287,20 +290,35 @@ begin
     v:=Eval(J);
     if not v then
     begin
+      Result:=false;
       Msg:=Msg+#13#10+(mstr+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
     end;
     J.Free;
     VHelper.PutNull('Y');
-    mstr:='IF(Y IS not NULL, PI*0.5, INT(PI)-(9<<2)*X)';
+    mstr:='IF(Y IS not NULL, 3*0.5+Y, 5.875-(9<<2)*X)';
     J:=ExprToJSON(mstr,VHelper);
     v:=Eval(J);
-    if not v then
+    if v<>-90.375 then
     begin
+      Result:=false;
+      Msg:=Msg+#13#10+(mstr+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
+    end;
+    J.Free;
+    mstr:='X:=X^X; Y:=(12|9)^(15%6); X:=(8+X)\5;'+mstr;
+    J:=ExprToJSON(mstr);  //此处不应当用变量代换
+    v:=Eval(J);
+    if v<>14.5 then
+    begin
+      Result:=false;
       Msg:=Msg+#13#10+(mstr+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
     end;
     J.Free;
     Free;
   end;
+  J:=JSONObject.Create;
+  VHelper.ValExport(J);
+  Msg:=Msg+#13#10+J.ToString;
+  J.Free;
   VHelper.Free;
 end;
 

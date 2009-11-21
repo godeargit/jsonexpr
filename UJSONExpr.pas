@@ -27,13 +27,15 @@ Ver 0.1  By creation_zy  (无尽愿)
   Function:
     ExprToJSON  //With VarHelper
     JSONToExpr  //With VarHelper
+    Eval
+    VarNeeded
 
   Support:
     Math operation:    + - * / \ % & | ^ ~ ! >> << SHR SHL
     Bool operation:    AND OR XOR
     Compare operation: = > < <> >= <=
-    Object operation:  . IN IS
-    Value set:         (a,b)
+    Object operation:  . IS
+    Value set:         IN (a,b)
     Condition expr:    IF( condition, value1, value2)
 }
 
@@ -86,12 +88,25 @@ type
   private
     FNextHelper: TJSONVarHelper;
     procedure SetNextHelper(const Value: TJSONVarHelper);
+  protected
+    function GetVarNames(const Idx: Integer): String; virtual;
+    function GetVarCount: Integer; virtual;
   public
     property NextHelper: TJSONVarHelper read FNextHelper write SetNextHelper;
-    function GetVar(const VarName: String; out Val:Variant):Boolean; virtual;
-    function GetVar2(AObj: JSONObject; out Val:Variant):Boolean; virtual;
     //对变量名进行规范化
     function CheckAndTransName(var VarName: String):Boolean; virtual;
+    //Read Value
+    function GetVar(const VarName: String; out Val: Variant):Boolean; virtual;
+    function GetVar2(AObj: JSONObject; out Val: Variant):Boolean; virtual;
+    //Write Value
+    function SetVar(const VarName: String; const Val: Variant):Boolean; virtual;
+    function SetVar2(AObj: JSONObject; const Val: Variant):Boolean; virtual;
+    //
+    property VarCount:Integer read GetVarCount;
+    property VarNames[const Idx:Integer]:String read GetVarNames;
+    //JSON I/O
+    function ValImport(PlainObj: JSONObject):Integer; virtual;
+    function ValExport(PlainObj: JSONObject):Integer; virtual;
   end;
   { 函数值获取类
     可以通过传入的JSON格式的函数，提取结果值。
@@ -111,6 +126,9 @@ type
   TSimpleVarHelper=class(TJSONVarHelper)
   private
     FValueHolder:JSONObject;
+  protected
+    function GetVarNames(const Idx: Integer): String; override;
+    function GetVarCount: Integer; override;
   public
     procedure Put(const VarName: String; V: Boolean); overload;
     procedure Put(const VarName: String; V: Double); overload;
@@ -120,6 +138,7 @@ type
     procedure Delete(const VarName: String);
     procedure Clean;
     function GetVar(const VarName: String; out Val:Variant):Boolean; override;
+    function SetVar(const VarName: String; const Val: Variant):Boolean; override;
     constructor Create;
     destructor Destroy; override;
   end;
@@ -134,10 +153,10 @@ threadvar
   LastExprType:TExprType;
 const
   Digits: set of Char=['0'..'9'];
-  VarBegin: set of Char=['a'..'z', 'A'..'Z', '_', '$', '@'];  //允许$以及@
-  VarBody: set of Char=['a'..'z', 'A'..'Z', '_', '$', '@', '0'..'9'];
+  VarBegin: set of Char=['a'..'z', 'A'..'Z', '_', '$', '@', #129..#254];  //允许$,@以及汉字
+  VarBody: set of Char=['a'..'z', 'A'..'Z', '_', '$', '@', '0'..'9', #129..#254];
   MathOp1: set of Char=['!', '~'];
-  MathOp2: set of Char=['+', '-', '*', '/', '\', '%', '^', '&', '|', '.'];  //Add '.'
+  MathOp2: set of Char=['+', '-', '*', '/', '\', '%', '^', '&', '|', '.', ';'];
   CompOp2: set of Char=['=', '>', '<'];
 
 
@@ -157,6 +176,42 @@ begin
   OpRank['O']:=r; OpRank['X']:=r; Dec(r,20);  //OR XOR
   OpRank['I']:=r; Dec(r,20);  //IN IS
   OpRank[':']:=r; OpRank[',']:=r; Dec(r,20);  //:=
+  OpRank[';']:=r; //Sentence end
+end;
+
+procedure PutVarToJSON(JObj: JSONObject; const VarName: String; const v: Variant);
+begin   
+  case VarType(v) of
+    varNull:
+      JObj.Put(VarName,CNULL);
+    varSmallInt, varInteger, varShortInt,  varWord:
+      JObj.Put(VarName,Integer(v));
+    varSingle, varDouble, varCurrency:
+      JObj.Put(VarName,Double(v));
+    varDate:
+      JObj.Put(VarName,DateTimeToStr(TDateTime(v)));
+    varOleStr:
+      JObj.Put(VarName,String(v));
+    varBoolean:
+      JObj.Put(VarName,Boolean(v));
+    else
+      JObj.Put(VarName,String(v));
+  end;
+end;
+
+function VarFromJSON(Z:TZAbstractObject):Variant;
+begin
+  if Z=nil then exit;
+  if Z.ClassType=_String then
+    Result:=Z.toString
+  else if Z.ClassType=_Boolean then
+    Result:=_Boolean(Z).boolValue
+  else if Z.ClassType=_Double then
+    Result:=_Double(Z).doubleValue
+  else if Z.ClassType=_Integer then
+    Result:=_Integer(Z).intValue
+  else
+    Result:=Null;
 end;
 
 { TJSONExprParser }
@@ -244,6 +299,23 @@ function TJSONExprParser.Eval(AObj: TZAbstractObject): Variant;
         Result:=v1=v2;
     end;
   end;
+  procedure SetValue;
+  var
+    Z:TZAbstractObject;
+    mstr:String;
+  begin
+    Result:=GetP2;  //将右侧表达式的值做为整个赋值过程的值
+    Z:=JSONObject(AObj).Opt(BIOS_Param1);
+    begin
+      if Z.ClassType=_String then
+      begin
+        mstr:=Z.toString;
+        if mstr='' then exit;
+        if mstr[1] in VarBegin then
+          VarHelper.SetVar(mstr,Result);
+      end;
+    end;
+  end;
 var
   Func,mstr:String;
   v1,v2:Variant;
@@ -304,9 +376,22 @@ begin
           if VarHelper<>nil then
             VarHelper.GetVar2(JSONObject(AObj),Result);
           exit;
-        end;
-        if Func[1] in (MathOp2+CompOp2) then
+        end
+        else if Func[1] in (MathOp2+CompOp2) then
         begin
+          if Func[1]=';' then
+          begin
+            //尽量获取后面那个表达式的值，如果只有一个表达式，那就获取第一个表达式的值
+            //eg:  X:=10; Y:=3; X*Y-9   => 21
+            if JSONObject(AObj).Length>2 then
+            begin
+              GetP1;
+              Result:=GetP2;
+            end
+            else
+              Result:=GetP1;
+            exit;
+          end;
           v1:=GetP1;
           v2:=GetP2;
           if (v1=Null) or (v2=Null) then  //两个表达式有一个为空的情况
@@ -327,8 +412,8 @@ begin
             '-': Result:=v1-v2;
             '*': Result:=v1*v2;
             '/': Result:=v1/v2;
-            '\': Result:=Trunc(v1) div Trunc(v2);
-            '%': Result:=Trunc(v1) mod Trunc(v2);
+            '\': Result:=Integer(v1) div Integer(v2);
+            '%': Result:=Integer(v1) mod Integer(v2);
             '^': Result:=Integer(v1) xor Integer(v2);
             '&': Result:=Integer(v1) and Integer(v2);
             '|': Result:=Integer(v1) or Integer(v2);
@@ -358,39 +443,60 @@ begin
           else if Func='>>' then
             Result:=Integer(GetP1) shr Integer(GetP2)
           else if Func='<<' then
-            Result:=Integer(GetP1) shl Integer(GetP2);
-        end
-        else if Func[1]='I' then
-        begin
-          if Func='IF' then
-          begin
-            v1:=GetP1;
-            if VarType(v1)=varBoolean then
-              if Boolean(v1) then
-                Result:=GetP2
-              else
-                Result:=GetP3;
-          end
-          else if Func='IN' then
-          begin
-            Result:=Func_IN;
-          end
-          else if Func='IS' then
-          begin
-            Result:=false;
-            v1:=GetP1;
-            v2:=GetP2;
-            Result:=(VarIsNull(v1) xor not VarIsNull(v2));
-          end
+            Result:=Integer(GetP1) shl Integer(GetP2)
           else
             Done:=false;
         end
-        else if Func='OR' then
-        begin
-          Result:=GetP1 or GetP2;
-        end
-        else
-          Done:=false;
+        else begin
+          case Func[1] of
+            ':':
+            begin
+              if Func[2]='=' then  //:=  Set variable value
+              begin
+                if VarHelper<>nil then
+                  SetValue;
+              end
+              else
+                Done:=false;
+            end;
+            'I':
+            begin
+              case Func[2] of
+                'F': //IF
+                begin
+                  v1:=GetP1;
+                  if VarType(v1)=varBoolean then
+                    if Boolean(v1) then
+                      Result:=GetP2
+                    else
+                      Result:=GetP3;
+                end;
+                'N': //IN
+                begin
+                  Result:=Func_IN;
+                end;
+                'S': //IS
+                begin
+                  Result:=false;
+                  v1:=GetP1;
+                  v2:=GetP2;
+                  Result:=(VarIsNull(v1) xor not VarIsNull(v2));
+                end;
+                else
+                  Done:=false;
+              end;
+            end;
+            'O':
+            begin
+              if Func[2]='R' then
+                Result:=GetP1 or GetP2
+              else
+                Done:=false;
+            end;
+            else
+              Done:=false;
+          end;
+        end;
       end;
       3:
       begin
@@ -475,6 +581,25 @@ function TJSONExprParser.EvalNumber(AObj: TZAbstractObject; out Val: Double):Boo
       end;
     end;
   end;
+  procedure SetValue;
+  var
+    Z:TZAbstractObject;
+    mstr:String;
+  begin
+    Val:=GetP2(Result);  //将右侧表达式的值做为整个赋值过程的值
+    if not Result then exit;
+    Z:=JSONObject(AObj).Opt(BIOS_Param1);
+    if Z<>nil then
+    begin
+      if Z.ClassType=_String then
+      begin
+        mstr:=Z.toString;
+        if mstr='' then exit;
+        if mstr[1] in VarBegin then
+          VarHelper.SetVar(mstr,Val);
+      end;
+    end;
+  end;
 var
   Func,mstr:String;
   v:Variant;
@@ -520,18 +645,20 @@ begin
   case Length(Func) of
     1:
     begin
-      if Func[1]='.' then  //something like:  Plan.Max
-      begin
-        if VarHelper<>nil then
-        begin
-          Result:=VarHelper.GetVar2(JSONObject(AObj),v);
-          if Result then
-            Val:=Double(v);
-        end;
-        exit;
-      end;
       if Func[1] in (MathOp2+CompOp2) then
       begin
+        if Func[1]=';' then
+        begin
+          //同上
+          if JSONObject(AObj).Length>2 then
+          begin
+            GetP1(Result);
+            Val:=GetP2(Result);
+          end
+          else
+            Val:=GetP1(Result);
+          exit;
+        end;
         Result:=true;
         v1:=GetP1(Result);
         v2:=GetP2(Result);
@@ -554,13 +681,27 @@ begin
           else Done:=false;
         end;
       end
-      else if Func[1]='!' then
-      begin
-        Result:=false;
-        exit;
-      end
-      else
-        Done:=false;
+      else begin
+        case Func[1] of
+          '.':  //something like:  Plan.Max
+          begin
+            if VarHelper<>nil then
+            begin
+              Result:=VarHelper.GetVar2(JSONObject(AObj),v);
+              if Result then
+                Val:=Double(v);
+            end;
+            exit;
+          end;
+          else if Func[1]='!' then
+          begin
+            Result:=false;
+            exit;
+          end
+          else
+            Done:=false;
+        end;
+      end;
     end;
     2:
     begin
@@ -632,7 +773,6 @@ var
   JObjs:array[0..64] of TZAbstractObject;
   LevelBC:array[0..64] of Integer;  //Block depth in eath level.  括号层级
   JLevel,BlockCnt:Integer;
-  LimitPos:Integer;
   function ExprLevel:Integer;
   begin
     if (JObjs[JLevel]=nil) or (JObjs[JLevel].ClassType=JSONObject) then
@@ -756,7 +896,6 @@ var
   var
     e,n:Integer;
     v:Variant;
-    NameStr:String;
   begin
     e:=ExprLevel;
     with JSONObject(JObjs[e]) do
@@ -1102,6 +1241,19 @@ begin
           AddOp(Ch,amFunc);
           Inc(i);
         end;
+        ':': //:=
+        begin
+          StrValue:=Ch;
+          while true do
+          begin
+            Inc(i);
+            if SubString[i]='=' then
+              StrValue:=StrValue+SubString[i]
+            else
+              break;
+          end;
+          AddOp(StrValue,amOperator,true);
+        end;
         '''':
         begin
           Inc(i);
@@ -1321,9 +1473,76 @@ begin
     Result:=GetVar(AObj.OptString(BIOS_Param1),Val);
 end;
 
+function TJSONVarHelper.GetVarCount: Integer;
+begin
+  Result:=-1;
+end;
+
+function TJSONVarHelper.GetVarNames(const Idx: Integer): String;
+begin
+  Result:='';
+end;
+
 procedure TJSONVarHelper.SetNextHelper(const Value: TJSONVarHelper);
 begin
   FNextHelper := Value;
+end;
+
+function TJSONVarHelper.SetVar(const VarName: String;
+  const Val: Variant): Boolean;
+begin
+  Result:=false;
+end;
+
+function TJSONVarHelper.SetVar2(AObj: JSONObject;
+  const Val: Variant): Boolean;
+begin
+  Result:=false;
+end;
+
+function TJSONVarHelper.ValExport(PlainObj: JSONObject): Integer;
+var
+  i:Integer;
+  mstr:String;
+  v:Variant;
+begin
+  if PlainObj=nil then
+  begin
+    Result:=0;
+    exit;
+  end;
+  Result:=VarCount;
+  if Result<=0 then exit;
+  for i:=0 to Pred(Result) do
+  begin
+    mstr:=VarNames[i];
+    if not GetVar(mstr,v) then
+      Dec(Result)
+    else
+      PutVarToJSON(PlainObj,mstr,v);
+  end;
+end;
+
+function TJSONVarHelper.ValImport(PlainObj: JSONObject): Integer;
+var
+  i:Integer;
+  mstr:String;
+  v:Variant;
+  Z:TZAbstractObject;
+begin
+  Result:=0;
+  if PlainObj=nil then exit;
+  with PlainObj do
+    for i:=0 to Pred(Length) do
+    begin
+      Z:=ValObjByIndex[i];
+      if Z.ClassType=JSONObject then continue;
+      mstr:=KeyByIndex[i];
+      if mstr='' then continue;
+      v:=VarFromJSON(Z);
+      if SetVar(mstr,v) then
+        Inc(Result);
+    end;
 end;
 
 { TJSONFuncHelper }
@@ -1379,17 +1598,18 @@ begin
     Result:=false;
     exit;
   end;
-  if Z.ClassType=_String then
-    Val:=Z.toString
-  else if Z.ClassType=_Boolean then
-    Val:=_Boolean(Z).boolValue
-  else if Z.ClassType=_Double then
-    Val:=_Double(Z).doubleValue
-  else if Z.ClassType=_Integer then
-    Val:=_Integer(Z).intValue
-  else
-    Val:=Null;
+  Val:=VarFromJSON(Z);
   Result:=true;
+end;
+
+function TSimpleVarHelper.GetVarCount: Integer;
+begin
+  Result:=FValueHolder.Length;
+end;
+
+function TSimpleVarHelper.GetVarNames(const Idx: Integer): String;
+begin
+  Result:=FValueHolder.KeyByIndex[Idx];
 end;
 
 procedure TSimpleVarHelper.Put(const VarName: String; V: Double);
@@ -1415,6 +1635,13 @@ end;
 procedure TSimpleVarHelper.PutNull(const VarName: String);
 begin
   FValueHolder.Put(VarName,CNULL);
+end;
+
+function TSimpleVarHelper.SetVar(const VarName: String;
+  const Val: Variant): Boolean;
+begin
+  PutVarToJSON(FValueHolder,VarName,Val);
+  Result:=true;
 end;
 
 initialization

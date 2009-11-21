@@ -1615,25 +1615,23 @@ begin
   begin
     raise NullPointerException.create('Null key.');
   end ;
-  if (value <> nil) then
+  if (value <> nil) then      {$D+}
   begin
     i := myHashMap.IndexOf(key);
     if ( i >= 0) then
     begin
       temp := myHashMap.Objects [i];
       myHashMap.Objects[i] := value;
-      temp.free;
+      if (temp<>CNULL) and (temp<>CONST_FALSE) and (temp<>CONST_TRUE) then  //Prevent to free const obj.  By craetion_zy  2009-11-21
+        temp.free;
     end
     else
       myHashMap.AddObject(key, value);
   end
   else begin
     temp:=remove(key);
-    if temp<>nil then
-    begin
-      if not IsConstJSON(temp) then  //Prevent to free const obj.  By craetion_zy  2009-11-21
-        temp.free;
-    end;
+    if (temp<>nil) and (temp<>CNULL) and (temp<>CONST_FALSE) and (temp<>CONST_TRUE) then  //Prevent to free const obj.  By craetion_zy  2009-11-21
+      temp.free;
   end;
   Result := self;
 end;
@@ -2077,13 +2075,7 @@ var
   i :integer;
   MyObj:TObject;
 begin
-  for i:=Pred(myHashMap.Count) downto 0 do
-  begin
-    MyObj:=myHashMap.Objects[i];
-    if (MyObj <> CONST_FALSE) and (MyObj <> CONST_TRUE) and (MyObj <> CNULL) then
-      MyObj.Free;
-  end;
-  myHashMap.Clear;
+  Clean;
   if System.Length(Value)<=2 then exit;
   token:=JSONTokener.create(Value);
   try
@@ -2572,16 +2564,6 @@ begin
     if (MyObj <> CONST_FALSE) and (MyObj <> CONST_TRUE) and (MyObj <> CNULL) then
       MyObj.Free;
   end;
-  {
-    while myHashMap.Count > 0 do begin
-      if (myHashMap.Objects [0] <> CONST_FALSE)
-        and (myHashMap.Objects [0] <> CONST_TRUE)
-        and (myHashMap.Objects [0] <> CNULL) then begin
-        myHashMap.Objects [0].Free;
-      end;
-      myHashMap.Objects [0] := nil;
-      myHashMap.Delete(0);
-    end;}
   myHashMap.Free;
   inherited;
 end;
@@ -2639,18 +2621,6 @@ begin
     if (obj <> CONST_FALSE) and (obj <> CONST_TRUE) and (obj <> CNULL) then
       obj.Free;
   end;
-  {
-  while myArrayList.Count > 0 do begin
-    obj := myArrayList [0];
-    myArrayList [0] := nil;
-    if (obj <> CONST_FALSE)
-      and (obj <> CONST_TRUE)
-      and (obj <> CNULL) then begin
-        obj.Free;
-    end;
-    myArrayList.Delete(0);
-  end;
-  }
   myArrayList.Free;
   inherited;
 end;
@@ -3475,4 +3445,5 @@ finalization
   CONST_FALSE.free;
   CONST_TRUE.Free;
   CNULL.free;
+
 end.
