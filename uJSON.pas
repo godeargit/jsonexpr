@@ -19,6 +19,12 @@
   Autor : Jose Fabio Nascimento de Almeida
   Data : 7/11/2005
 
+
+Change Logs:
+2009-11-22  By creation_zy
+  Can parse #10 #13 inside a string.
+  JSONObject.quote method can deal with special character smaller than space.
+  Value inside a _String object can Read/Write directly.
 }
 unit uJSON;
 
@@ -277,11 +283,16 @@ Type
   end;
 
   _String = class (TZAbstractObject)
+  private
+    function GetAsString: String;
+    procedure SetAsString(const Value: String);
+  public
     constructor create (const s : string);
     function equalsIgnoreCase (const s: string) : boolean;
     function Equals(const Value: TZAbstractObject): Boolean; override;
     function toString() : string; override;
     function clone :TZAbstractObject; override;
+    property AsString: String read GetAsString write SetAsString;  //By creation_zy  2009-11-22
   private
     fvalue : string;
   end;
@@ -587,7 +598,11 @@ begin
     case (c) of
       #0, #10, #13:
       begin
-        raise syntaxError('Unterminated string');
+        //Ignore #10 and #13 inside a string.  By creation_zy  2009-11-22
+        if c=#0 then
+          raise syntaxError('Unterminated string')
+        else
+          continue;
       end;
       '\':
       begin
@@ -1703,10 +1718,18 @@ begin
         end;
         sb := sb + c;
       end;
-      #8, #9, #10, #12, #13:
+      {#8, #9, #10, #12, #13:
       begin
         sb := sb + c;
-      end;
+      end;}
+      //Output special character smaller than space.  By creation_zy  2009-11-22
+      #0: sb := sb + '\u0000';
+      #1..#7: sb := sb + '\u000'+Char(Byte('0')+Byte(c));
+      #8: sb := sb + '\b';
+      #9: sb := sb + '\t';
+      #10: sb := sb + '\n';
+      #12: sb := sb + '\f';
+      #13: sb := sb + '\r';
       else
       begin
         if (c < ' ') then
@@ -2392,6 +2415,16 @@ end;
 function _String.equalsIgnoreCase(const s: string): boolean;
 begin
    Result := AnsiLowerCase (s) = AnsiLowerCase (fvalue);
+end;
+
+function _String.GetAsString: String;
+begin
+  Result:=fvalue;
+end;
+
+procedure _String.SetAsString(const Value: String);
+begin
+  fvalue:=Value;
 end;
 
 function _String.toString: string;
