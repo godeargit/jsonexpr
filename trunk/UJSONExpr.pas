@@ -31,12 +31,37 @@ Ver 0.1  By creation_zy  (无尽愿)
     VarNeeded
 
   Support:
-    Math operation:    + - * / \ % & | ^ ~ ! >> << SHR SHL
+    Math operation:    + - * / \ % & | ^ ~ ! >> <<
     Bool operation:    AND OR XOR
     Compare operation: = > < <> >= <=
     Object operation:  . IS
-    Value set:         IN (a,b)
+    Value collection:  IN (a,b)
     Condition expr:    IF( condition, value1, value2)
+
+2009-11-21
+  Support:
+    Set value          X := Y
+    Sentence end tag   ;
+  VarHelper can talk with common JSONObject.
+
+2009-11-22
+ver 0.2  By creation_zy  (无尽愿)
+  支持赋值以及语句结束符
+  JSONToExpr now support the tag ":=" and ";".
+  支持Len字符串函数
+  Support Len string function.
+  字符串定义支持 #123 的形式
+  String defination support things like "#123".  eg: 'Hello!'#13#10
+  相邻的字符串定义将被合并为一个字符串
+  Adjacent string expression can combine automatically.  eg:  'ABC'  'abc' => 'ABCabc'
+  变量名可以通过后续的普通字符串进行延长
+  Variable name can extent by the next string expression.  eg:  Michael' Jordan' => var "Michael Jordan"
+  变量名可以包含大于#128的字符（可以使用国标汉字）
+  Variable name can hold character biger than #128.
+  可在IF中嵌套多个语句，实现分支效果
+  Sentence in IF function is available.  eg:  if(X>2,(Y:=X-2;Z:=X*Y;),Z:=-X)
+  支持语句行执行事件(之后触发)、变量写入事件(之前触发)
+  Support event trigger after a line execute and before value assignment.
 }
 
 unit UJSONExpr;
@@ -52,6 +77,8 @@ const
   BIOS_Param1='p1';
   BIOS_StrParamHeader='''';    //为了将字符串与变量名相区别，所有字符串值均带单引号前缀
 type
+  TTraceLineFunc=procedure (Sender: TObject; LineData: TZAbstractObject; const LineVal: Variant);
+  TTraceValueFunc=procedure (Sender: TObject; const VarName: String; const Val: Variant);
   TExprType=(etEmpty, etNumber, etBool, etString, etMixed);
   TJSONVarHelper=class;
   TJSONFuncHelper=class;
@@ -62,9 +89,16 @@ type
   private
     FFuncHelper: TJSONFuncHelper;
     FVarHelper: TJSONVarHelper;
+    FTraceOnLine: Boolean;
+    FOnLineComplete: TTraceLineFunc;
+    procedure SetOnLineComplete(const Value: TTraceLineFunc);
+    procedure SetTraceOnLine(const Value: Boolean);
   public
     property VarHelper: TJSONVarHelper read FVarHelper;
     property FuncHelper: TJSONFuncHelper read FFuncHelper;
+    //是否在一个语句执行完毕时触发
+    property TraceOnLine:Boolean read FTraceOnLine write SetTraceOnLine;
+    property OnLineComplete:TTraceLineFunc read FOnLineComplete write SetOnLineComplete;
     function Eval(AObj: TZAbstractObject):Variant;
     function EvalNumber(AObj: TZAbstractObject; out Val:Double):Boolean;
     function OptimizeJSON(AObj: JSONObject):JSONObject;
@@ -73,10 +107,15 @@ type
     //将文本表达式转换为JSON表达式树，允许代入变量的值  2+(X*Sin(Y)) => {op:"+",p1:2,p2:{op:"*",p1:"X",p2:{op:"SIN",p1:"Y"}}}
     class function ExprToJSON(const Expr: String; VarHelper: TJSONVarHelper=nil;
       PStart: PInteger=nil; PEnd: PInteger=nil; POutExprLen: PInteger=nil):JSONObject;
+    class function ExprToJSONStr(const Expr: String; VarHelper: TJSONVarHelper=nil):String;
     class function GetLastExprType:TExprType;
-    //如果InExpr为真，会尽量返回带括号的结果
-    class function JSONToExpr(AObj: JSONObject; VarHelper: TJSONVarHelper=nil;
-      InExpr: Boolean=false):String;
+    { 将JSON表达式还原为文本表达式
+      如果指定了VarHelper，会将变量的值代入结果文本
+      如果ParentOpRank<0，会为所有表达式加上括号
+      如果ParentOpRank>0，会根据运算符优先级，返回尽量不带括号的结果
+    }
+    class function JSONToExpr(AObj: JSONObject; ParentOpRank: Integer=-1;
+      VarHelper: TJSONVarHelper=nil):String;
     class function VarToExprStr(V: Variant):String;
     class function VarNeeded(AObj: JSONObject; var Vars: TStrings):Integer;
   end;
@@ -91,13 +130,17 @@ type
   protected
     function GetVarNames(const Idx: Integer): String; virtual;
     function GetVarCount: Integer; virtual;
+    function GetTraceOnSet: Boolean; virtual;
+    procedure SetTraceOnSet(const Value: Boolean); virtual;
   public
     property NextHelper: TJSONVarHelper read FNextHelper write SetNextHelper;
+    property TraceOnSet:Boolean read GetTraceOnSet write SetTraceOnSet;
     //对变量名进行规范化
     function CheckAndTransName(var VarName: String):Boolean; virtual;
     //Read Value
     function GetVar(const VarName: String; out Val: Variant):Boolean; virtual;
     function GetVar2(AObj: JSONObject; out Val: Variant):Boolean; virtual;
+    function GetVarDef(const VarName: String; const Default: Variant):Variant;
     //Write Value
     function SetVar(const VarName: String; const Val: Variant):Boolean; virtual;
     function SetVar2(AObj: JSONObject; const Val: Variant):Boolean; virtual;
@@ -126,10 +169,16 @@ type
   TSimpleVarHelper=class(TJSONVarHelper)
   private
     FValueHolder:JSONObject;
+    FTraceOnSet: Boolean;
+    FOnTrace: TTraceValueFunc;
+    procedure SetOnTrace(const Value: TTraceValueFunc);
   protected
     function GetVarNames(const Idx: Integer): String; override;
     function GetVarCount: Integer; override;
+    function GetTraceOnSet: Boolean; override;
+    procedure SetTraceOnSet(const Value: Boolean); override;
   public
+    property OnTrace:TTraceValueFunc read FOnTrace write SetOnTrace;
     procedure Put(const VarName: String; V: Boolean); overload;
     procedure Put(const VarName: String; V: Double); overload;
     procedure Put(const VarName: String; V: Integer); overload;
@@ -156,7 +205,7 @@ const
   VarBegin: set of Char=['a'..'z', 'A'..'Z', '_', '$', '@', #129..#254];  //允许$,@以及汉字
   VarBody: set of Char=['a'..'z', 'A'..'Z', '_', '$', '@', '0'..'9', #129..#254];
   MathOp1: set of Char=['!', '~'];
-  MathOp2: set of Char=['+', '-', '*', '/', '\', '%', '^', '&', '|', '.', ';'];
+  MathOp2: set of Char=['+', '-', '*', '/', '\', '%', '^', '&', '|', '.', ':', ';'];
   CompOp2: set of Char=['=', '>', '<'];
 
 
@@ -171,7 +220,6 @@ begin
   OpRank['+']:=r; OpRank['-']:=r; Dec(r,20);
   OpRank['>']:=r; OpRank['<']:=r; OpRank['=']:=r; Dec(r,20);
   OpRank['&']:=r; OpRank['|']:=r; OpRank['^']:=r; Dec(r,20);
-  OpRank['S']:=r; Dec(r,20);  //SHR SHL
   OpRank['A']:=r; Dec(r,20);  //AND
   OpRank['O']:=r; OpRank['X']:=r; Dec(r,20);  //OR XOR
   OpRank['I']:=r; Dec(r,20);  //IN IS
@@ -385,11 +433,30 @@ begin
             //eg:  X:=10; Y:=3; X*Y-9   => 21
             if JSONObject(AObj).Length>2 then
             begin
-              GetP1;
-              Result:=GetP2;
-            end
-            else
               Result:=GetP1;
+              if TraceOnLine then
+              begin
+                Z:=JSONObject(AObj).Opt(BIOS_Param1);
+                if Assigned(FOnLineComplete) then
+                  FOnLineComplete(Self,JSONObject(Z),Result);
+              end;
+              Result:=GetP2;
+              if TraceOnLine then
+              begin
+                Z:=JSONObject(AObj).Opt(BIOS_ParamHeader+'2');
+                if Assigned(FOnLineComplete) then
+                  FOnLineComplete(Self,JSONObject(Z),Result);
+              end;
+            end
+            else begin
+              Result:=GetP1;
+              if TraceOnLine then
+              begin
+                Z:=JSONObject(AObj).Opt(BIOS_Param1);
+                if Assigned(FOnLineComplete) then
+                  FOnLineComplete(Self,JSONObject(Z),Result);
+              end;
+            end;
             exit;
           end;
           v1:=GetP1;
@@ -488,7 +555,7 @@ begin
             end;
             'O':
             begin
-              if Func[2]='R' then
+              if Func[2]='R' then  //OR
                 Result:=GetP1 or GetP2
               else
                 Done:=false;
@@ -506,6 +573,11 @@ begin
               Result:=Boolean(GetP1) and Boolean(GetP2)
             else
               Done:=false;
+          'L':
+            if Func='LEN' then
+              Result:=Length(String(GetP1))
+            else
+              Done:=false;
           'N':
             if Func='NOT' then
             begin
@@ -517,13 +589,6 @@ begin
               else
                 Result:=Boolean(Result);
             end
-            else
-              Done:=false;
-          'S':
-            if Func='SHL' then
-              Result:=Integer(GetP1) shl Integer(GetP2)
-            else if Func='SHR' then
-              Result:=Integer(GetP1) shr Integer(GetP2)
             else
               Done:=false;
           'X':
@@ -719,7 +784,7 @@ begin
       else
         Done:=false;
     end;
-    3:
+    {3:
     begin
       case Func[1] of
         'S':
@@ -736,7 +801,7 @@ begin
         else
           Done:=false;
       end;
-    end;
+    end;}
     else
       Done:=false;
   end;
@@ -755,7 +820,7 @@ end;
 class function TJSONExprParser.ExprToJSON(const Expr: String;
   VarHelper: TJSONVarHelper; PStart, PEnd, POutExprLen: PInteger): JSONObject;
 type
-  TAddMode=(amBlock, amFunc, amOperator);
+  TAddMode=(amNone, amBlock, amFunc, amOperator);
 var
   SubString: String;
   //Use this function to check whether the name is a var or a function.
@@ -772,6 +837,7 @@ var
 var
   JObjs:array[0..64] of TZAbstractObject;
   LevelBC:array[0..64] of Integer;  //Block depth in eath level.  括号层级
+  LevelOpKind:array[0..64] of TAddMode;  //各个层次的操作符类型
   JLevel,BlockCnt:Integer;
   function ExprLevel:Integer;
   begin
@@ -783,7 +849,16 @@ var
   function FuncLevel:Integer;
   begin
     Result:=ExprLevel;
-    while LevelBC[Result]=BlockCnt do
+    while LevelBC[Result]>=BlockCnt do
+    begin
+      Dec(Result);
+      if Result<0 then break;
+    end;
+  end;
+  function BlockLevel:Integer;
+  begin
+    Result:=ExprLevel;
+    while (LevelBC[Result]>0) and ((Result>0) and (LevelBC[Result]=LevelBC[Result-1])) do
     begin
       Dec(Result);
       if Result<0 then break;
@@ -794,14 +869,27 @@ var
     Op:String;
   begin
     Result:=ExprLevel;
-    while LevelBC[Result]=BlockCnt do
+    //If the expression is inside a block or not...
+    if LevelBC[Result]>BlockCnt then  // ... A ? (B ? C) / ...  or  ... A ?  Func( B ? C ) / ...
     begin
-      Dec(Result);
-      if Result<0 then break;
-      Op:=JSONObject(JObjs[Result]).OptString(BIOS_Operator);
-      if Op<>'' then
-        if OpRank[Op[1]]<Rank then break;
-    end;
+      repeat
+        Dec(Result);
+        if Result<0 then break;
+        if LevelOpKind[Result]=amFunc then continue; //函数优先级最高，无需比较
+        Op:=JSONObject(JObjs[Result]).OptString(BIOS_Operator);
+        if Op<>'' then
+          if OpRank[Op[1]]<Rank then break;
+      until LevelBC[Result]<BlockCnt;
+    end
+    else  // ... A ? B / ...
+      while LevelBC[Result]=BlockCnt do
+      begin
+        Dec(Result);
+        if Result<0 then break;
+        Op:=JSONObject(JObjs[Result]).OptString(BIOS_Operator);
+        if Op<>'' then
+          if OpRank[Op[1]]<Rank then break;
+      end;
     Inc(Result);
   end;
   procedure WriteFloat(F: Double);
@@ -816,12 +904,21 @@ var
       JLevel:=e+1;
       JObjs[JLevel]:=ValObjByIndex[n];
       LevelBC[JLevel]:=BlockCnt;
+      LevelOpKind[JLevel]:=amNone;
     end;
   end;
   procedure WriteStr(const S: String);
   var
     e,n:Integer;
   begin
+    //将两个前后连续定义、且没有其它操作符夹杂的的字符串合并为一个 eg:   'ABC' 'abc'  => 'ABCabc'
+    //可以实现用字符串加长变量名的效果  eg:  X2' Old'  will be var name "X2 Old"
+    if (JObjs[JLevel].ClassType=_String) then
+    begin
+      with _String(JObjs[JLevel]) do
+        AsString:=AsString+S;
+      exit;
+    end;
     e:=ExprLevel;
     with JSONObject(JObjs[e]) do
     begin
@@ -830,6 +927,7 @@ var
       JLevel:=e+1;
       JObjs[JLevel]:=ValObjByIndex[n];
       LevelBC[JLevel]:=BlockCnt;
+      LevelOpKind[JLevel]:=amNone;
     end;
   end;
   procedure WriteObjStr(const S: String);
@@ -850,6 +948,7 @@ var
       JLevel:=e+1;
       JObjs[JLevel]:=ValObjByIndex[n];
       LevelBC[JLevel]:=BlockCnt;
+      LevelOpKind[JLevel]:=amNone;
     end;
   end;
   procedure WriteBool(B: Boolean);
@@ -864,6 +963,7 @@ var
       JLevel:=e+1;
       JObjs[JLevel]:=ValObjByIndex[n];
       LevelBC[JLevel]:=BlockCnt;
+      LevelOpKind[JLevel]:=amNone;
     end;
   end;
   procedure WriteNull;
@@ -878,6 +978,7 @@ var
       JLevel:=e+1;
       JObjs[JLevel]:=ValObjByIndex[n];
       LevelBC[JLevel]:=BlockCnt;
+      LevelOpKind[JLevel]:=amNone;
     end;
   end;
   procedure WriteValVar(v: Variant);
@@ -926,6 +1027,7 @@ var
       JLevel:=e+1;
       JObjs[JLevel]:=ValObjByIndex[n];
       LevelBC[JLevel]:=BlockCnt;
+      LevelOpKind[JLevel]:=amNone;
     end;
     Result:=true;
   end;
@@ -944,10 +1046,10 @@ var
     label CommonCase;
   begin
     //初始的情况
-    if (JLevel<0) or (JObjs[JLevel]=nil) then
+    if (JObjs[JLevel]=nil) then
     begin
-      JLevel:=0;
       JObjs[JLevel]:=NewFuncObj;
+      LevelOpKind[JLevel]:=AddMode;
       exit;
     end;
     //最后一个Symbol是简单值或变量的情况 -- 应当将其提升，嵌入到Func表达式内
@@ -959,13 +1061,14 @@ var
         n:=JLevel-1;
         JP:=JSONObject(JObjs[n]); //表达式JSON对象
         //没有操作符的表达式 -- 填入Func
-        if JP.OptString(BIOS_Operator)='' then
+        if LevelOpKind[n]=amNone {JP.OptString(BIOS_Operator)=''} then
         begin
           JP.Put(BIOS_Operator,Func);
+          LevelOpKind[n]:=AddMode;
           Dec(JLevel);
           exit;
         end;
-        if (n>=0) and (LevelBC[n]=BlockCnt) then  //当前双目操作符和前一个表达式位于相同的括号层次
+        if LevelBC[n]>=BlockCnt then  //当前双目操作符和前一个表达式位于相同的括号层次
         begin
           if (AddMode=amOperator) and (Func<>'') then
           begin
@@ -985,26 +1088,41 @@ var
         JObjs[JLevel]:=NewFuncObj;
         JSONObject(JObjs[JLevel]).Put(BIOS_Param1,Z);
         JP.Put(mstr,JObjs[JLevel]);
+        if Func='' then
+          LevelOpKind[JLevel]:=amNone
+        else
+          LevelOpKind[JLevel]:=AddMode;
       end
       else begin
-        J:=JSONObject(JObjs[JLevel-1]);
-        if J.OptString(BIOS_Operator)='' then
-          J.Put(BIOS_Operator,Func);
+        n:=JLevel-1;
+        if LevelOpKind[n]=amNone {J.OptString(BIOS_Operator)=''} then
+        begin
+          JSONObject(JObjs[n]).Put(BIOS_Operator,Func);
+          if Func='' then
+            LevelOpKind[n]:=amNone
+          else
+            LevelOpKind[n]:=AddMode;
+        end;
         Dec(JLevel);
       end;
       exit;
+    end
+    else if UsePiror then
+    begin
+      JLevel:=InBlockLevel(OpRank[Func[1]]);
     end;
   CommonCase:
     J:=JSONObject(JObjs[JLevel]);
     if AddMode=amFunc then
       with J do
-      begin
-        IsEmpty:=(Length<=1) and (OptString(BIOS_Operator)='');
-        if IsEmpty then
-          AddMode:=amOperator;
-      end;
-    if (AddMode=amOperator) and (J.OptString(BIOS_Operator)='') then
-      J.Put(BIOS_Operator,Func)
+        IsEmpty:=(Length<=1) and (LevelOpKind[JLevel]=amNone) //(OptString(BIOS_Operator)='')
+    else
+      IsEmpty:=false;
+    if ((AddMode=amOperator) or IsEmpty) and (LevelOpKind[JLevel]=amNone){(J.OptString(BIOS_Operator)='')} then
+    begin
+      J.Put(BIOS_Operator,Func);
+      LevelOpKind[JLevel]:=AddMode;
+    end
     else begin
       JN:=NewFuncObj;
       JObjs[JLevel+1]:=JN;
@@ -1016,7 +1134,7 @@ var
         //当前Level的所有者
         if JLevel>0 then
         begin
-          if LevelBC[JLevel]=BlockCnt then
+          if LevelBC[JLevel]>=BlockCnt then
             JP:=JSONObject(JObjs[JLevel-1])
           else begin
             with J do
@@ -1050,6 +1168,10 @@ var
           Put(BIOS_ParamHeader+IntToStr(Length),JObjs[JLevel+1]);
       LevelBC[JLevel+1]:=BlockCnt;
       Inc(JLevel);
+      if Func='' then
+        LevelOpKind[JLevel]:=amNone
+      else
+        LevelOpKind[JLevel]:=AddMode;
     end;
   end;
 var
@@ -1057,7 +1179,9 @@ var
   FuncName: String;
   ExprStart: Boolean;
   StrValue: string;
+  CW:Word;
   Ch:Char;
+  WCh:WideChar;
 begin
   LastExprType:=etEmpty;
   if PStart<>nil then
@@ -1080,22 +1204,23 @@ begin
       POutExprLen^:=0;
     exit;
   end;
-  JLevel:=-1;
-  AddOp('');
+  JLevel:=0;
+  AddOp('',amNone);
   LevelBC[0]:=0;
   BlockCnt:=0;
   FuncName:='';
   ExprStart:=true;
-  I:=1;
-  while I <= length(SubString) do
+  e:=Length(SubString);
+  i:=1;
+  while i<=e do
   begin
-    StrValue:='';
     Ch:=SubString[I];
     if Ch<=' ' then
     begin
       Inc(I);
       continue;
     end;
+    StrValue:='';
     if (ExprStart and (Ch='-')) or (Ch in Digits) then
     begin
       repeat
@@ -1148,10 +1273,10 @@ begin
         FuncName:='';
       end;
     end
-    else if (Ch in MathOp2+CompOp2) then  //双目运算符以及比较操作符
+    else if (Ch in MathOp2+CompOp2) then  //双目运算符以及比较操作符、赋值运算符
     begin
       if JLevel>=High(JObjs) then break;  //强制跳出
-      if Ch in MathOp2 then
+      if Ch in MathOp2-[':'] then  //排除赋值的情况
       begin
         StrValue:=Ch;
         Inc(I);
@@ -1209,7 +1334,7 @@ begin
         end;
         ')':
         begin
-          JLevel:=FuncLevel;
+          JLevel:=BlockLevel; //FuncLevel;
           if JLevel<0 then JLevel:=0;
           Dec(BlockCnt);
           Inc(I);
@@ -1241,40 +1366,55 @@ begin
           AddOp(Ch,amFunc);
           Inc(i);
         end;
-        ':': //:=
-        begin
-          StrValue:=Ch;
-          while true do
-          begin
-            Inc(i);
-            if SubString[i]='=' then
-              StrValue:=StrValue+SubString[i]
-            else
-              break;
-          end;
-          AddOp(StrValue,amOperator,true);
-        end;
         '''':
         begin
           Inc(i);
-          while true do
+          while i<=e do
           begin
             if SubString[i]='''' then
             begin
-              if SubString[i+1]='''' then
+              Inc(i);
+              if (i<=e) and (SubString[i]='''') then
               begin
                 StrValue:=StrValue+'''';
-                Inc(i,2);
-              end
-              else begin
                 Inc(i);
+              end
+              else
                 break;
-              end;
             end
             else begin
               StrValue:=StrValue+SubString[i];
               Inc(i);
             end;
+          end;
+          WriteStr(StrValue);
+        end;
+        '#':  //Allow #123 in String
+        begin
+          CW:=0;
+          while true do
+          begin
+            Inc(i);
+            if SubString[i] in Digits then
+              CW:=CW*10+(Byte(SubString[i])-Byte('0'))
+            else if SubString[i]='#' then
+            begin
+              if CW<256 then
+                StrValue:=StrValue+Char(CW)
+              else begin
+                PWord(@WCh)^:=CW;
+                StrValue:=StrValue+WCh;
+              end;
+              CW:=0;
+            end
+            else
+              break;
+          end;
+          if CW<256 then
+            StrValue:=StrValue+Char(CW)
+          else begin
+            PWord(@WCh)^:=CW;
+            StrValue:=StrValue+WCh;
           end;
           WriteStr(StrValue);
         end;
@@ -1302,15 +1442,31 @@ begin
     POutExprLen^:=i;
 end;
 
+class function TJSONExprParser.ExprToJSONStr(const Expr: String;
+  VarHelper: TJSONVarHelper): String;
+var
+  J:JSONObject;
+begin
+  J:=ExprToJSON(Expr,VarHelper);
+  if J=nil then
+    Result:=''
+  else begin
+    Result:=J.ToString;
+    J.Free;
+  end;
+end;
+
 class function TJSONExprParser.GetLastExprType: TExprType;
 begin
   Result:=LastExprType;
 end;
 
-class function TJSONExprParser.JSONToExpr(AObj: JSONObject; VarHelper: TJSONVarHelper;
-  InExpr: Boolean): String;
+class function TJSONExprParser.JSONToExpr(AObj: JSONObject; ParentOpRank: Integer;
+  VarHelper: TJSONVarHelper): String;
 var
+  Func:String;
   IsCommonFunc:Boolean;
+  OpRk:Integer;
   function J2Str(Z: TZAbstractObject):String;
   var
     v:Variant;
@@ -1323,9 +1479,14 @@ var
     if Z.ClassType=JSONObject then
     begin
       if IsCommonFunc then  //只有一个参数的普通函数自带括号了
-        Result:=JSONToExpr(JSONObject(Z),VarHelper,AObj.Length>2)
+      begin
+        if ParentOpRank<0 then
+          Result:=JSONToExpr(JSONObject(Z),ParentOpRank,VarHelper)
+        else
+          Result:=JSONToExpr(JSONObject(Z),0,VarHelper)
+      end
       else
-        Result:=JSONToExpr(JSONObject(Z),VarHelper,true)
+        Result:=JSONToExpr(JSONObject(Z),OpRk,VarHelper);
     end
     else begin
       Result:=Z.toString;
@@ -1344,22 +1505,34 @@ var
   end;
 var
   i:Integer;
-  Func:String;
 begin
   Result:='';
   if AObj=nil then exit;
   Func:=AObj.OptString(BIOS_Operator);
-  IsCommonFunc:=(Func='') or not ((Func[1] in MathOp2+CompOp2+['.']) or (Func='AND') or (Func='OR') or (Func='IN') or (Func='IS'));
+  IsCommonFunc:=(Func='') or not ((Func[1] in MathOp2+CompOp2+['.']+MathOp1) or (Func='AND') or (Func='OR') or (Func='IN') or (Func='IS'));
+  if IsCommonFunc or (ParentOpRank<0) then
+    OpRk:=-1
+  else
+    OpRk:=OpRank[Func[1]];
   Result:=J2Str(AObj.Opt(BIOS_Param1));
   if Func='' then exit;
-  if (Func[1] in MathOp2+CompOp2+['.']) or (Func='AND') or (Func='OR') or (Func='IN') or (Func='IS') then
+  if (Func[1] in MathOp2+CompOp2+['.']+MathOp1) or (Func='AND') or (Func='OR') or (Func='IN') or (Func='IS') then
   begin
     if Func[1] in MathOp2+CompOp2+['.'] then
       Result:=Result+Func
+    else if Func[1] in MathOp1 then
+    begin
+      Result:=Func+Result;
+      if (ParentOpRank<0) or (OpRk<ParentOpRank) then
+        Result:='('+Result+')';
+      exit;
+    end
     else
       Result:=Result+' '+Func+' ';
     Result:=Result+J2Str(AObj.Opt(BIOS_ParamHeader+'2'));
-    if InExpr then
+    //if InExpr and (Func[1]<>';') then
+      //Result:='('+Result+')';
+    if (ParentOpRank<0) or (OpRk<ParentOpRank) then
       Result:='('+Result+')';
   end
   else begin
@@ -1399,6 +1572,16 @@ begin
     end;
     SL.Free;
   end;
+end;
+
+procedure TJSONExprParser.SetOnLineComplete(const Value: TTraceLineFunc);
+begin
+  FOnLineComplete := Value;
+end;
+
+procedure TJSONExprParser.SetTraceOnLine(const Value: Boolean);
+begin
+  FTraceOnLine := Value;
 end;
 
 class function TJSONExprParser.VarNeeded(AObj: JSONObject; var Vars: TStrings):Integer;
@@ -1457,6 +1640,11 @@ begin
   Result:=true;
 end;
 
+function TJSONVarHelper.GetTraceOnSet: Boolean;
+begin
+  Result:=false;
+end;
+
 function TJSONVarHelper.GetVar(const VarName: String; out Val:Variant):Boolean;
 begin
   if NextHelper<>nil then
@@ -1478,6 +1666,13 @@ begin
   Result:=-1;
 end;
 
+function TJSONVarHelper.GetVarDef(const VarName: String;
+  const Default: Variant): Variant;
+begin
+  if not GetVar(VarName,Result) then
+    Result:=Default;
+end;
+
 function TJSONVarHelper.GetVarNames(const Idx: Integer): String;
 begin
   Result:='';
@@ -1486,6 +1681,11 @@ end;
 procedure TJSONVarHelper.SetNextHelper(const Value: TJSONVarHelper);
 begin
   FNextHelper := Value;
+end;
+
+procedure TJSONVarHelper.SetTraceOnSet(const Value: Boolean);
+begin
+
 end;
 
 function TJSONVarHelper.SetVar(const VarName: String;
@@ -1587,6 +1787,11 @@ begin
   FValueHolder.Remove(VarName).Free;
 end;
 
+function TSimpleVarHelper.GetTraceOnSet: Boolean;
+begin
+  Result:=FTraceOnSet;
+end;
+
 function TSimpleVarHelper.GetVar(const VarName: String;
   out Val: Variant): Boolean;
 var
@@ -1637,9 +1842,22 @@ begin
   FValueHolder.Put(VarName,CNULL);
 end;
 
+procedure TSimpleVarHelper.SetOnTrace(const Value: TTraceValueFunc);
+begin
+  FOnTrace := Value;
+end;
+
+procedure TSimpleVarHelper.SetTraceOnSet(const Value: Boolean);
+begin
+  FTraceOnSet := Value;
+end;
+
 function TSimpleVarHelper.SetVar(const VarName: String;
   const Val: Variant): Boolean;
 begin
+  if FTraceOnSet then
+    if Assigned(FOnTrace) then
+      FOnTrace(Self,VarName,Val);
   PutVarToJSON(FValueHolder,VarName,Val);
   Result:=true;
 end;

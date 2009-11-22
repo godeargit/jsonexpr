@@ -23,13 +23,39 @@ function TestJSONExprParser(out Msg: String): Boolean;
 
 implementation
 
+var
+  DebugMsg:String;
+
+procedure TraceLine(Sender: TObject; LineData: TZAbstractObject; const LineVal: Variant);
+var
+  mstr:String;
+begin
+  if LineData=nil then exit;
+  if LineData.ClassType<>JSONObject then
+  begin
+    mstr:='('+LineData.toString+')';
+  end
+  else begin
+    mstr:=JSONObject(LineData).OptString(BIOS_Operator);
+    if mstr=';' then exit;
+    mstr:='"'+mstr+'"';
+  end;
+  DebugMsg:=DebugMsg+'[L]'+mstr+'=>'+VarToStrDef(LineVal,'N/A')+#13#10;
+end;
+
+procedure TraceValue(Sender: TObject; const VarName: String; const Val: Variant);
+begin
+  DebugMsg:=DebugMsg+'[V]'+VarName+':='+VarToStrDef(Val,'N/A')+#13#10;
+end;
+
 function TestJSONExprParser(out Msg: String): Boolean;
 var
   VHelper:TSimpleVarHelper;
   J:JSONObject;
-  mstr:String;
+  mstr,mstr2,s1,s2:String;
   f,f2:Double;
   v:Variant;
+  b:Boolean;
 begin
   Msg:='';
   Result:=true;
@@ -76,22 +102,44 @@ begin
         Result:=false;
         Msg:=Msg+#13#10+(mstr+#13#10'=>'#9+toString2(2));
       end;
-      if JSONToExpr(J)<>'2+(X*SIN(Y))' then
+      if (JSONToExpr(J)<>'(2+(X*SIN(Y)))') or (JSONToExpr(J,0)<>'2+X*SIN(Y)') then
       begin
         Result:=false;
-        Msg:=Msg+#13#10+(JSONToExpr(J));
+        Msg:=Msg+#13#10+JSONToExpr(J)+#13#10+JSONToExpr(J,0);
       end;
       Free;
     end;
     mstr:='Z+X * 2-Y';
-    with ExprToJSON(mstr) do
+    J:=ExprToJSON(mstr);
+    with J do
     begin
       if toString<>'{op:"-",p1:{op:"+",p1:"Z",p2:{op:"*",p1:"X",p2:2}},p2:"Y"}' then
       begin
         Result:=false;
         Msg:=Msg+#13#10+(mstr+#13#10'=>'#9+toString2(2));
       end;
+      if (JSONToExpr(J)<>'((Z+(X*2))-Y)') or (JSONToExpr(J,MaxInt)<>'(Z+X*2-Y)') then
+      begin
+        Result:=false;
+        Msg:=Msg+#13#10+JSONToExpr(J)+#13#10+JSONToExpr(J,MaxInt);
+      end;
       Free;
+    end;
+    mstr:='2+Z+X*2/Y'; mstr2:='2+Z+(X*2)/Y';
+    s1:=ExprToJSONStr(mstr);
+    s2:=ExprToJSONStr(mstr2);
+    if s1<>s2 then
+    begin
+      Result:=false;
+      Msg:=Msg+#13#10+mstr+' =>'#13#10+s1+#13#10+mstr2+' =>'+#13#10+s2;
+    end;
+    mstr:='2+Z/(X*2)/Y'; mstr2:='2+(Z/(X*2))/Y';
+    s1:=ExprToJSONStr(mstr);
+    s2:=ExprToJSONStr(mstr2);
+    if s1<>s2 then
+    begin
+      Result:=false;
+      Msg:=Msg+#13#10+mstr+' =>'#13#10+s1+#13#10+mstr2+' =>'+#13#10+s2;
     end;
     mstr:='Z*(X.Max+0.5)-dbo.Y.Add(2)';
     J:=ExprToJSON(mstr);
@@ -102,7 +150,12 @@ begin
         Result:=false;
         Msg:=Msg+#13#10+(mstr+#13#10'=>'#9+toString2(2));
       end;
-      if JSONToExpr(J)<>'(Z*((X.Max)+0.5))-((dbo.Y).ADD(2))' then
+      if JSONToExpr(J)<>'((Z*((X.Max)+0.5))-((dbo.Y).ADD(2)))' then
+      begin
+        Result:=false;
+        Msg:=Msg+#13#10+(JSONToExpr(J));
+      end;
+      if JSONToExpr(J,0)<>'Z*(X.Max+0.5)-dbo.Y.ADD(2)' then
       begin
         Result:=false;
         Msg:=Msg+#13#10+(JSONToExpr(J));
@@ -119,10 +172,10 @@ begin
       end;
       Free;
     end;
-    mstr:='Fn_1(-A)-(-X)';
+    mstr:='Fn_1(-A)+(-X)';
     with ExprToJSON(mstr) do
     begin
-      if toString<>'{op:"-",p1:{op:"FN_1",p1:{op:"-",p1:0,p2:"A"}},p2:{op:"-",p1:0,p2:"X"}}' then
+      if toString<>'{op:"+",p1:{op:"FN_1",p1:{op:"-",p1:0,p2:"A"}},p2:{op:"-",p1:0,p2:"X"}}' then
       begin
         Result:=false;
         Msg:=Msg+#13#10+(mstr+#13#10'=>'#9+toString);
@@ -138,10 +191,11 @@ begin
         Result:=false;
         Msg:=Msg+#13#10+(mstr+#13#10'=>'#9+toString2(2));
       end;
-      if JSONToExpr(J)<>'IF((X>=0),X,((Y-X)+POWER(LN(Z),3)))-100' then
+      s1:=JSONToExpr(J);
+      if s1<>'(IF((X>=0),X,((Y-X)+POWER(LN(Z),3)))-100)' then
       begin
         Result:=false;
-        Msg:=Msg+#13#10+(JSONToExpr(J));
+        Msg:=Msg+#13#10+mstr+' => '+s1;
       end;
       Free;
     end;
@@ -154,10 +208,11 @@ begin
         Result:=false;
         Msg:=Msg+#13#10+(mstr+#13#10'=>'#9+toString());
       end;
-      if JSONToExpr(J)<>'(ROUND(PI*$v1)^(~(36)*2))-100' then
+      s1:=JSONToExpr(J,0);
+      if s1<>'(ROUND(PI*$v1)^~36*2)-100' then
       begin
         Result:=false;
-        Msg:=Msg+#13#10+(JSONToExpr(J));
+        Msg:=Msg+#13#10+mstr+' => '+s1;
       end;
       Free;
     end;
@@ -170,10 +225,11 @@ begin
         Result:=false;
         Msg:=Msg+#13#10+(mstr+#13#10'=>'#9+toString2(2));
       end;
-      if JSONToExpr(J)<>'Name1 IN ((''M''+''ike''),'''',''Nike'',@@Name)' then
+      s1:=JSONToExpr(J,0);
+      if s1<>'Name1 IN (''M''+''ike'','''',''Nike'',@@Name)' then
       begin
         Result:=false;
-        Msg:=Msg+#13#10+(JSONToExpr(J));
+        Msg:=Msg+#13#10+mstr+' => '+s1;
       end;
       Free;
     end;
@@ -218,7 +274,7 @@ begin
         Result:=false;
         Msg:=Msg+#13#10+(mstr+#13#10'=>'#9+toString2(2));
       end;
-      if JSONToExpr(J)<>'(LEFT(X,4)=''YEAR'') OR (LIKE(Y,''%2009%'') AND (X IS null))' then
+      if JSONToExpr(J)<>'((LEFT(X,4)=''YEAR'') OR (LIKE(Y,''%2009%'') AND (X IS null)))' then
       begin
         Result:=false;
         Msg:=Msg+#13#10+(JSONToExpr(J));
@@ -298,21 +354,58 @@ begin
     mstr:='IF(Y IS not NULL, 3*0.5+Y, 5.875-(9<<2)*X)';
     J:=ExprToJSON(mstr,VHelper);
     v:=Eval(J);
-    if v<>-90.375 then
+    if v<>-102.125 then
     begin
       Result:=false;
-      Msg:=Msg+#13#10+(mstr+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
+      Msg:=Msg+#13#10+(mstr+#13#10+JSONToExpr(J,0)+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
     end;
-    J.Free;
+    FreeAndNil(J);
     mstr:='X:=X^X; Y:=(12|9)^(15%6); X:=(8+X)\5;'+mstr;
     J:=ExprToJSON(mstr);  //此处不应当用变量代换
     v:=Eval(J);
-    if v<>14.5 then
+    if v<>15.5 then
     begin
       Result:=false;
-      Msg:=Msg+#13#10+(mstr+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
+      Msg:=Msg+#13#10+(mstr+#13#10+JSONToExpr(J)+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
     end;
     J.Free;
+    //Debug example
+    DebugMsg:='';
+    TraceOnLine:=true;
+    OnLineComplete:=TraceLine;
+    VHelper.TraceOnSet:=true;
+    VHelper.OnTrace:=TraceValue;
+    mstr:='X1:=1; Y:=IF(X IS NULL,0,X1^5);Z:=9*IF(X1+2<=(3+Y),X2:=X1<<3,(Y:=X1*10; X2:=Y^100));(Y+Z)*X2';
+    //mstr:='Z:=9*IF(X1+2<=(3+Y),X2:=X1<<3,(Y:=X1*10; X2:=Y^100))';
+    J:=ExprToJSON(mstr);
+    v:=Eval(J);
+    if v<>608 then
+    begin
+      Result:=false;
+      Msg:=Msg+#13#10+(mstr+#13#10+J.ToString2(2)+#13#10+JSONToExpr(J)+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
+    end;
+    if DebugMsg<>'' then
+      Msg:=Msg+#13#10'Debug Message:'#13#10+DebugMsg;
+    J.Free;
+    DebugMsg:='';
+    //String expression, Special variable name.
+    mstr:='Str  ''~1'':=#13#10''Hello World!''#9; 字符串2:=''你好'' #32+''世界'' ''!''; Result:=Len(Str''~1'')>Len(字符串2);';
+    J:=ExprToJSON(mstr);
+    try
+      v:=Eval(J);
+      b:=(v<>True) or (v<>VHelper.GetVarDef('Result',false));
+    except
+      b:=true;
+    end;
+    if true then
+    begin
+      Result:=false;
+      Msg:=Msg+#13#10+(mstr+#13#10+J.ToString2(2)+#13#10+JSONToExpr(J)+#13#10+JSONToExpr(J,0)+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
+    end;
+    if DebugMsg<>'' then
+      Msg:=Msg+#13#10'Debug Message:'#13#10+DebugMsg;
+    J.Free;
+    DebugMsg:='';
     Free;
   end;
   J:=JSONObject.Create;
@@ -320,6 +413,7 @@ begin
   Msg:=Msg+#13#10+J.ToString;
   J.Free;
   VHelper.Free;
+  DebugMsg:='';
 end;
 
 end.
