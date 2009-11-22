@@ -376,7 +376,6 @@ begin
     VHelper.TraceOnSet:=true;
     VHelper.OnTrace:=TraceValue;
     mstr:='X1:=1; Y:=IF(X IS NULL,0,X1^5);Z:=9*IF(X1+2<=(3+Y),X2:=X1<<3,(Y:=X1*10; X2:=Y^100));(Y+Z)*X2';
-    //mstr:='Z:=9*IF(X1+2<=(3+Y),X2:=X1<<3,(Y:=X1*10; X2:=Y^100))';
     J:=ExprToJSON(mstr);
     v:=Eval(J);
     if v<>608 then
@@ -397,7 +396,7 @@ begin
     except
       b:=true;
     end;
-    if true then
+    if b then
     begin
       Result:=false;
       Msg:=Msg+#13#10+(mstr+#13#10+J.ToString2(2)+#13#10+JSONToExpr(J)+#13#10+JSONToExpr(J,0)+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
