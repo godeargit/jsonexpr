@@ -1530,8 +1530,6 @@ begin
     else
       Result:=Result+' '+Func+' ';
     Result:=Result+J2Str(AObj.Opt(BIOS_ParamHeader+'2'));
-    //if InExpr and (Func[1]<>';') then
-      //Result:='('+Result+')';
     if (ParentOpRank<0) or (OpRk<ParentOpRank) then
       Result:='('+Result+')';
   end
