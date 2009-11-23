@@ -2095,8 +2095,6 @@ end;
 procedure JSONObject.SetAsString(const Value: String);
 var
   token:JSOnTokener;
-  i :integer;
-  MyObj:TObject;
 begin
   Clean;
   if System.Length(Value)<=2 then exit;
