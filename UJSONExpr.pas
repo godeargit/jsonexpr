@@ -62,6 +62,12 @@ ver 0.2  By creation_zy  (无尽愿)
   Sentence in IF function is available.  eg:  if(X>2,(Y:=X-2;Z:=X*Y;),Z:=-X)
   支持语句行执行事件(之后触发)、变量写入事件(之前触发)
   Support event trigger after a line execute and before value assignment.
+
+2009-11-23
+By creation_zy  (无尽愿)
+  Increase the speed of parser.
+  Fix bug that can't process "XOR".
+  New TMemVarHelper class to access local variables.
 }
 
 unit UJSONExpr;
@@ -147,6 +153,7 @@ type
     //
     property VarCount:Integer read GetVarCount;
     property VarNames[const Idx:Integer]:String read GetVarNames;
+    procedure Clean; virtual;
     //JSON I/O
     function ValImport(PlainObj: JSONObject):Integer; virtual;
     function ValExport(PlainObj: JSONObject):Integer; virtual;
@@ -185,9 +192,37 @@ type
     procedure Put(const VarName: String; const V: String); overload;
     procedure PutNull(const VarName: String);
     procedure Delete(const VarName: String);
-    procedure Clean;
+    procedure Clean; override;
     function GetVar(const VarName: String; out Val:Variant):Boolean; override;
     function SetVar(const VarName: String; const Val: Variant):Boolean; override;
+    constructor Create;
+    destructor Destroy; override;
+  end;
+  { Var Helper can directly register and access variables in memory.  直接访问本地变量
+  }
+  TMemVarHelper=class(TJSONVarHelper)
+  private
+    FVals:TStringList;
+    FTypes:TStrings;
+  protected
+    function GetVarNames(const Idx: Integer): String; override;
+    function GetVarCount: Integer; override;
+  public
+    procedure RegInt(const VarName: String; const P: PInteger);
+    procedure RegDouble(const VarName: String; const P: PDouble);
+    procedure RegBool(const VarName: String; const P: PBoolean);
+    procedure RegChar(const VarName: String; const P: PChar);
+    procedure RegByte(const VarName: String; const P: PByte);
+    procedure RegWord(const VarName: String; const P: PWord);
+    procedure RegLongWord(const VarName: String; const P: PLongWord);
+    procedure RegShortInt(const VarName: String; const P: PShortInt);
+    procedure RegInt64(const VarName: String; const P: PInt64);
+    procedure RegSingle(const VarName: String; const P: PSingle);
+    function GetVar(const VarName: String; out Val:Variant):Boolean; override;
+    function SetVar(const VarName: String; const Val: Variant):Boolean; override;
+    procedure Sort;
+    function Sorted:Boolean;
+    procedure Clean; override;
     constructor Create;
     destructor Destroy; override;
   end;
@@ -196,25 +231,29 @@ implementation
 
 type
   TVarAy=array of Variant;
+  TOpChar=Char;
 var
-  OpRank:array [Char] of Byte;  //操作符优先级表（根据操作符的首字母来确定）
+  OpRank:array [TOpChar] of Byte;  //操作符优先级表（根据操作符的首字母来确定）
 threadvar
   LastExprType:TExprType;
 const
+  OpCh_None:TOpChar=#0;
+  OpCh_Func:TOpChar=#255;
   Digits: set of Char=['0'..'9'];
   VarBegin: set of Char=['a'..'z', 'A'..'Z', '_', '$', '@', #129..#254];  //允许$,@以及汉字
   VarBody: set of Char=['a'..'z', 'A'..'Z', '_', '$', '@', '0'..'9', #129..#254];
-  MathOp1: set of Char=['!', '~'];
-  MathOp2: set of Char=['+', '-', '*', '/', '\', '%', '^', '&', '|', '.', ':', ';'];
-  CompOp2: set of Char=['=', '>', '<'];
+  MathOp1: set of Char=['!', '~'];  //单目运算符
+  MathOp2: set of Char=['+', '-', '*', '/', '\', '%', '^', '&', '|', '.', ':', ';'];  //双目运算符
+  CompOp2: set of Char=['=', '>', '<'];  //比较运算符
 
 
 procedure InitOpRank;
 var
   r:Byte;
-begin
+begin                                                     
+  OpRank[OpCh_Func]:=255;  //Function
   r:=240;
-  OpRank['(']:=r; OpRank['[']:=r; OpRank['.']:=r; Dec(r,20);
+  OpRank['(']:=r; OpRank['[']:=r; OpRank[']']:=r; OpRank['.']:=r; Dec(r,20);
   OpRank['!']:=r; OpRank['~']:=r; OpRank['N']:=r; Dec(r,20);  //NOT
   OpRank['*']:=r; OpRank['/']:=r; OpRank['\']:=r; OpRank['%']:=r; Dec(r,20);
   OpRank['+']:=r; OpRank['-']:=r; Dec(r,20);
@@ -391,7 +430,11 @@ begin
       Result:=_Number(AObj).doubleValue;
     exit;
   end;
-  Z:=JSONObject(AObj).ValObjByIndex[0];  //第一个成员，应当是 BIOS_Operator
+  with JSONObject(AObj) do
+  begin
+    if Length=0 then exit;  //不含任何数据
+    Z:=ValObjByIndex[0];  //第一个成员，应当是 BIOS_Operator
+  end;
   if (Z<>nil) and (Z.ClassType=JSONObject) then  //操作符是JSON对象
   begin
     if FuncHelper<>nil then
@@ -668,6 +711,7 @@ function TJSONExprParser.EvalNumber(AObj: TZAbstractObject; out Val: Double):Boo
 var
   Func,mstr:String;
   v:Variant;
+  va:TVarAy;
   v1,v2:Double;
   Done:Boolean;
   Z:TZAbstractObject;
@@ -784,37 +828,36 @@ begin
       else
         Done:=false;
     end;
-    {3:
-    begin
-      case Func[1] of
-        'S':
-        begin
-          Result:=true;
-          if Func='SHL' then
-            Val:=Trunc(GetP1(Result)) shl Trunc(GetP2(Result))
-          else if Func='SHR' then
-            Val:=Trunc(GetP1(Result)) shr Trunc(GetP2(Result))
-          else
-            Done:=false;
-          if not Result then exit;
-        end;
-        else
-          Done:=false;
-      end;
-    end;}
     else
       Done:=false;
   end;
-  if Done then exit;
-  {
+  if Done or not Result then exit;
   if FuncHelper<>nil then
+  begin
     case JSONObject(AObj).Length of
-      2: FuncHelper.GetValue(Self,Func,[GetP1],Result);
-      3: FuncHelper.GetValue(Self,Func,[GetP2,GetP2],Result);
-      else
-        FuncHelper.GetValue(Self,Func,GetParams(JSONObject(AObj)),Result);
+      2:
+      begin
+        v1:=GetP1(Result);
+        if Result then
+          Result:=FuncHelper.GetValue(Self,Func,[v1],v);
+      end;
+      3:
+      begin
+        v1:=GetP1(Result);
+        if Result then
+          v2:=GetP2(Result);
+        if Result then
+          Result:=FuncHelper.GetValue(Self,Func,[v1,v2],v);
+      end;
+      else begin
+        va:=GetParams(JSONObject(AObj),Result);
+        if Result then
+          Result:=FuncHelper.GetValue(Self,Func,va,v);
+      end;
     end;
-  }
+    if Result then
+      try Val:=Double(v); except Result:=false; end;
+  end;
 end;
 
 class function TJSONExprParser.ExprToJSON(const Expr: String;
@@ -837,7 +880,7 @@ var
 var
   JObjs:array[0..64] of TZAbstractObject;
   LevelBC:array[0..64] of Integer;  //Block depth in eath level.  括号层级
-  LevelOpKind:array[0..64] of TAddMode;  //各个层次的操作符类型
+  LevelOpCh:array[0..64] of TOpChar;  //各个层次的操作符  如果是普通函数或者没有操作符，就是#0
   JLevel,BlockCnt:Integer;
   function ExprLevel:Integer;
   begin
@@ -875,7 +918,7 @@ var
       repeat
         Dec(Result);
         if Result<0 then break;
-        if LevelOpKind[Result]=amFunc then continue; //函数优先级最高，无需比较
+        if LevelOpCh[Result]=OpCh_Func then continue; //函数优先级最高，无需比较
         Op:=JSONObject(JObjs[Result]).OptString(BIOS_Operator);
         if Op<>'' then
           if OpRank[Op[1]]<Rank then break;
@@ -904,7 +947,7 @@ var
       JLevel:=e+1;
       JObjs[JLevel]:=ValObjByIndex[n];
       LevelBC[JLevel]:=BlockCnt;
-      LevelOpKind[JLevel]:=amNone;
+      LevelOpCh[JLevel]:=OpCh_None;
     end;
   end;
   procedure WriteStr(const S: String);
@@ -927,7 +970,7 @@ var
       JLevel:=e+1;
       JObjs[JLevel]:=ValObjByIndex[n];
       LevelBC[JLevel]:=BlockCnt;
-      LevelOpKind[JLevel]:=amNone;
+      LevelOpCh[JLevel]:=OpCh_None;
     end;
   end;
   procedure WriteObjStr(const S: String);
@@ -948,7 +991,7 @@ var
       JLevel:=e+1;
       JObjs[JLevel]:=ValObjByIndex[n];
       LevelBC[JLevel]:=BlockCnt;
-      LevelOpKind[JLevel]:=amNone;
+      LevelOpCh[JLevel]:=OpCh_None;
     end;
   end;
   procedure WriteBool(B: Boolean);
@@ -963,7 +1006,7 @@ var
       JLevel:=e+1;
       JObjs[JLevel]:=ValObjByIndex[n];
       LevelBC[JLevel]:=BlockCnt;
-      LevelOpKind[JLevel]:=amNone;
+      LevelOpCh[JLevel]:=OpCh_None;
     end;
   end;
   procedure WriteNull;
@@ -978,7 +1021,7 @@ var
       JLevel:=e+1;
       JObjs[JLevel]:=ValObjByIndex[n];
       LevelBC[JLevel]:=BlockCnt;
-      LevelOpKind[JLevel]:=amNone;
+      LevelOpCh[JLevel]:=OpCh_None;
     end;
   end;
   procedure WriteValVar(v: Variant);
@@ -1027,7 +1070,7 @@ var
       JLevel:=e+1;
       JObjs[JLevel]:=ValObjByIndex[n];
       LevelBC[JLevel]:=BlockCnt;
-      LevelOpKind[JLevel]:=amNone;
+      LevelOpCh[JLevel]:=OpCh_None;
     end;
     Result:=true;
   end;
@@ -1049,7 +1092,10 @@ var
     if (JObjs[JLevel]=nil) then
     begin
       JObjs[JLevel]:=NewFuncObj;
-      LevelOpKind[JLevel]:=AddMode;
+      if Func<>'' then
+        LevelOpCh[JLevel]:=Func[1]
+      else
+        LevelOpCh[JLevel]:=OpCh_None;
       exit;
     end;
     //最后一个Symbol是简单值或变量的情况 -- 应当将其提升，嵌入到Func表达式内
@@ -1061,10 +1107,13 @@ var
         n:=JLevel-1;
         JP:=JSONObject(JObjs[n]); //表达式JSON对象
         //没有操作符的表达式 -- 填入Func
-        if LevelOpKind[n]=amNone {JP.OptString(BIOS_Operator)=''} then
+        if LevelOpCh[n]=OpCh_None then
         begin
           JP.Put(BIOS_Operator,Func);
-          LevelOpKind[n]:=AddMode;
+          if AddMode=amOperator then
+            LevelOpCh[n]:=Func[1]
+          else if AddMode=amFunc then
+            LevelOpCh[n]:=OpCh_Func;
           Dec(JLevel);
           exit;
         end;
@@ -1072,8 +1121,9 @@ var
         begin
           if (AddMode=amOperator) and (Func<>'') then
           begin
-            mstr:=JSONObject(JObjs[n]).OptString(BIOS_Operator);
-            if (mstr<>'') and (OpRank[Func[1]]<=OpRank[mstr[1]]) then
+            //mstr:=JSONObject(JObjs[n]).OptString(BIOS_Operator);
+            //if (mstr<>'') and (OpRank[Func[1]]<=OpRank[mstr[1]]) then
+            if (LevelOpCh[n]<>#0) and (OpRank[Func[1]]<=OpRank[LevelOpCh[n]]) then
             begin
               JLevel:=InBlockLevel(OpRank[Func[1]]); //InBlockLevel; //n;
               goto CommonCase;
@@ -1089,19 +1139,23 @@ var
         JSONObject(JObjs[JLevel]).Put(BIOS_Param1,Z);
         JP.Put(mstr,JObjs[JLevel]);
         if Func='' then
-          LevelOpKind[JLevel]:=amNone
+          LevelOpCh[JLevel]:=OpCh_None
+        else if AddMode=amOperator then
+          LevelOpCh[JLevel]:=Func[1] //AddMode;
         else
-          LevelOpKind[JLevel]:=AddMode;
+          LevelOpCh[JLevel]:=OpCh_Func;
       end
       else begin
         n:=JLevel-1;
-        if LevelOpKind[n]=amNone {J.OptString(BIOS_Operator)=''} then
+        if LevelOpCh[n]=OpCh_None then
         begin
           JSONObject(JObjs[n]).Put(BIOS_Operator,Func);
           if Func='' then
-            LevelOpKind[n]:=amNone
+            LevelOpCh[n]:=OpCh_None
+          else if AddMode=amOperator then
+            LevelOpCh[n]:=Func[1] //AddMode;
           else
-            LevelOpKind[n]:=AddMode;
+            LevelOpCh[n]:=OpCh_Func;
         end;
         Dec(JLevel);
       end;
@@ -1115,13 +1169,19 @@ var
     J:=JSONObject(JObjs[JLevel]);
     if AddMode=amFunc then
       with J do
-        IsEmpty:=(Length<=1) and (LevelOpKind[JLevel]=amNone) //(OptString(BIOS_Operator)='')
+        IsEmpty:=(Length<=1) and (LevelOpCh[JLevel]=OpCh_None) //(OptString(BIOS_Operator)='')
     else
       IsEmpty:=false;
-    if ((AddMode=amOperator) or IsEmpty) and (LevelOpKind[JLevel]=amNone){(J.OptString(BIOS_Operator)='')} then
+    if ((AddMode=amOperator) or IsEmpty) and (LevelOpCh[JLevel]=OpCh_None) then
     begin
       J.Put(BIOS_Operator,Func);
-      LevelOpKind[JLevel]:=AddMode;
+      //LevelOpCh[JLevel]:=AddMode;
+      if AddMode=amOperator then
+        LevelOpCh[JLevel]:=Func[1] //AddMode;
+      else if AddMode=amFunc then
+        LevelOpCh[JLevel]:=OpCh_Func
+      else
+        LevelOpCh[JLevel]:=OpCh_None
     end
     else begin
       JN:=NewFuncObj;
@@ -1145,6 +1205,12 @@ var
             end;
             Inc(JLevel);
             LevelBC[JLevel]:=BlockCnt;
+            if Func='' then
+              LevelOpCh[JLevel]:=OpCh_None
+            else if AddMode=amOperator then
+              LevelOpCh[JLevel]:=Func[1]
+            else
+              LevelOpCh[JLevel]:=OpCh_Func;
             exit;
           end;
         end
@@ -1161,6 +1227,12 @@ var
         else
           JN.Put(BIOS_Param1,J);
         JObjs[JLevel]:=JN;
+        if Func='' then
+          LevelOpCh[JLevel]:=OpCh_None
+        else if AddMode=amOperator then
+          LevelOpCh[JLevel]:=Func[1]
+        else
+          LevelOpCh[JLevel]:=OpCh_Func;
         exit;
       end
       else
@@ -1169,9 +1241,11 @@ var
       LevelBC[JLevel+1]:=BlockCnt;
       Inc(JLevel);
       if Func='' then
-        LevelOpKind[JLevel]:=amNone
+        LevelOpCh[JLevel]:=OpCh_None
+      else if AddMode in [amOperator,amBlock] then
+        LevelOpCh[JLevel]:=Func[1]
       else
-        LevelOpKind[JLevel]:=AddMode;
+        LevelOpCh[JLevel]:=OpCh_Func;
     end;
   end;
 var
@@ -1245,7 +1319,7 @@ begin
         Inc(i);
       until (SubString[I] in VarBody)=false;
       FuncName:=UpperCase(StrValue);
-      if (FuncName='AND') or (FuncName='OR') or (FuncName='IN') or (FuncName='IS') then  //双目运算符
+      if (FuncName='AND') or (FuncName='OR') or (FuncName='IN') or (FuncName='IS') or (FuncName='XOR') then  //双目运算符
       begin
         if JLevel>=High(JObjs) then break;  //强制跳出
         AddOp(FuncName,amOperator,true);
@@ -1306,10 +1380,16 @@ begin
               begin
                 Put(BIOS_Operator,'(');  //括号做为集合标志
               end
+              else if StrValue='[' then  //Array  ... ? [ a, b]  or  ... A[1,2]
+              begin
+                Inc(JLevel);
+                Dec(LevelBC[JLevel]);
+              end
               else if not (StrValue[1] in VarBegin+['(']) or (StrValue='IN') then
               begin
                 Inc(JLevel);
-                AddOp('(',amOperator,true);
+                if LevelOpCh[JLevel]<>'[' then
+                  AddOp('(',amOperator,true);
                 Dec(LevelBC[JLevel]);
               end;
             end;
@@ -1342,15 +1422,15 @@ begin
         end;
         '[':  //数组下标
         begin
-          AddOp(Ch,amFunc);
           Inc(BlockCnt);
+          AddOp(Ch,amBlock);
           Inc(I);
           FuncName:='';
           ExprStart:=true;
         end;
         ']':
         begin
-          JLevel:=FuncLevel;
+          JLevel:=BlockLevel;
           if JLevel<0 then
             JLevel:=0
           else if JLevel>0 then
@@ -1509,14 +1589,14 @@ begin
   Result:='';
   if AObj=nil then exit;
   Func:=AObj.OptString(BIOS_Operator);
-  IsCommonFunc:=(Func='') or not ((Func[1] in MathOp2+CompOp2+['.']+MathOp1) or (Func='AND') or (Func='OR') or (Func='IN') or (Func='IS'));
+  IsCommonFunc:=(Func='') or not ((Func[1] in MathOp2+CompOp2+['.']+MathOp1) or (Func='AND') or (Func='OR') or (Func='IN') or (Func='IS') or (Func='XOR'));
   if IsCommonFunc or (ParentOpRank<0) then
     OpRk:=-1
   else
     OpRk:=OpRank[Func[1]];
   Result:=J2Str(AObj.Opt(BIOS_Param1));
   if Func='' then exit;
-  if (Func[1] in MathOp2+CompOp2+['.']+MathOp1) or (Func='AND') or (Func='OR') or (Func='IN') or (Func='IS') then
+  if (Func[1] in MathOp2+CompOp2+['.']+MathOp1) or (Func='AND') or (Func='OR') or (Func='IN') or (Func='IS') or (Func='XOR') then
   begin
     if Func[1] in MathOp2+CompOp2+['.'] then
       Result:=Result+Func
@@ -1536,6 +1616,11 @@ begin
   else begin
     for i:=2 to Pred(AObj.Length) do
       Result:=Result+','+J2Str(AObj.Opt(BIOS_ParamHeader+IntToStr(i)));
+    if Func[1]='[' then
+    begin
+      Result:='['+Result+']';
+      exit;
+    end;
     Result:='('+Result+')';
     if Func<>'(' then  //集合以 "(" 做为操作符
       Result:=Func+Result;
@@ -1636,6 +1721,11 @@ end;
 function TJSONVarHelper.CheckAndTransName(var VarName: String): Boolean;
 begin
   Result:=true;
+end;
+
+procedure TJSONVarHelper.Clean;
+begin
+
 end;
 
 function TJSONVarHelper.GetTraceOnSet: Boolean;
@@ -1858,6 +1948,195 @@ begin
       FOnTrace(Self,VarName,Val);
   PutVarToJSON(FValueHolder,VarName,Val);
   Result:=true;
+end;
+
+{ TMemVarHelper }
+
+procedure TMemVarHelper.Clean;
+begin
+  FVals.Clear;
+  FreeAndNil(FTypes);
+end;
+
+constructor TMemVarHelper.Create;
+begin
+  FVals:=TStringList.Create;
+  FVals.Duplicates:=dupIgnore;
+end;
+
+destructor TMemVarHelper.Destroy;
+begin
+  FVals.Free;
+  FTypes.Free;
+  inherited;
+end;
+
+function TMemVarHelper.GetVar(const VarName: String;
+  out Val: Variant): Boolean;
+var
+  i:Integer;
+  Ch:Char;
+begin
+  if FTypes<>nil then
+  begin
+    i:=FVals.IndexOf(VarName);
+    if i<0 then
+    begin
+      Result:=false;
+      exit;
+    end;
+    Ch:=FTypes[i][1];
+  end
+  else begin
+    i:=FVals.IndexOfName(VarName);
+    if i<0 then
+    begin
+      Result:=false;
+      exit;
+    end;
+    Ch:=FVals.ValueFromIndex[i][1];
+  end;
+  case Ch of
+    'D': Val:=PDouble(FVals.Objects[i])^;
+    'B': Val:=PBoolean(FVals.Objects[i])^;
+    'C': Val:=PChar(FVals.Objects[i])^;
+    'F': Val:=PSingle(FVals.Objects[i])^;
+    'L': Val:=PLongWord(FVals.Objects[i])^;
+    'W': Val:=PWord(FVals.Objects[i])^;
+    'Y': Val:=PByte(FVals.Objects[i])^;
+    'i': Val:=PShortInt(FVals.Objects[i])^;
+    '6': Val:=PInt64(FVals.Objects[i])^;
+    else Val:=PInteger(FVals.Objects[i])^;
+  end;
+  Result:=true;
+end;
+
+function TMemVarHelper.GetVarCount: Integer;
+begin
+  Result:=FVals.Count;
+end;
+
+function TMemVarHelper.GetVarNames(const Idx: Integer): String;
+begin
+  if FTypes=nil then
+    Result:=FVals.Names[Idx]
+  else
+    Result:=FVals[Idx];
+end;
+
+procedure TMemVarHelper.RegBool(const VarName: String; const P: PBoolean);
+begin
+  FVals.AddObject(VarName+'=B',TObject(P));
+end;
+
+procedure TMemVarHelper.RegByte(const VarName: String; const P: PByte);
+begin
+  FVals.AddObject(VarName+'=Y',TObject(P));
+end;
+
+procedure TMemVarHelper.RegChar(const VarName: String; const P: PChar);
+begin
+  FVals.AddObject(VarName+'=C',TObject(P));
+end;
+
+procedure TMemVarHelper.RegDouble(const VarName: String; const P: PDouble);
+begin                                      
+  FVals.AddObject(VarName+'=D',TObject(P));
+end;
+
+procedure TMemVarHelper.RegInt(const VarName: String; const P: PInteger);
+begin
+  FVals.AddObject(VarName+'=I',TObject(P));
+end;
+
+procedure TMemVarHelper.RegInt64(const VarName: String; const P: PInt64);
+begin
+  FVals.AddObject(VarName+'=6',TObject(P));
+end;
+
+procedure TMemVarHelper.RegLongWord(const VarName: String;
+  const P: PLongWord);
+begin
+  FVals.AddObject(VarName+'=L',TObject(P));
+end;
+
+procedure TMemVarHelper.RegShortInt(const VarName: String;
+  const P: PShortInt);
+begin
+  FVals.AddObject(VarName+'=i',TObject(P));
+end;
+
+procedure TMemVarHelper.RegSingle(const VarName: String; const P: PSingle);
+begin
+  FVals.AddObject(VarName+'=F',TObject(P));
+end;
+
+procedure TMemVarHelper.RegWord(const VarName: String; const P: PWord);
+begin
+  FVals.AddObject(VarName+'=W',TObject(P));
+end;
+
+function TMemVarHelper.SetVar(const VarName: String;
+  const Val: Variant): Boolean;
+var
+  i:Integer;
+  S:String;
+  Ch:Char;
+begin
+  Result:=false;
+  if FTypes<>nil then
+  begin
+    i:=FVals.IndexOf(VarName);
+    if i<0 then exit;
+    Ch:=FTypes[i][1];
+  end
+  else begin
+    i:=FVals.IndexOfName(VarName);
+    if i<0 then exit;
+    Ch:=FVals.ValueFromIndex[i][1];
+  end;
+  try
+    case Ch of
+      'D': PDouble(FVals.Objects[i])^:=Double(Val);
+      'F': PSingle(FVals.Objects[i])^:=Single(Val);
+      'B': PBoolean(FVals.Objects[i])^:=Boolean(Val);
+      'C':
+      begin
+        S:=VarToStrDef(Val,'');
+        if S='' then S:=#0;
+        PChar(FVals.Objects[i])^:=S[1];
+      end;
+      'L': PLongWord(FVals.Objects[i])^:=LongWord(Val);
+      'W': PWord(FVals.Objects[i])^:=Word(Val);
+      'Y': PByte(FVals.Objects[i])^:=Byte(Val);
+      'i': PShortInt(FVals.Objects[i])^:=Val;
+      '6': PInt64(FVals.Objects[i])^:=Val;
+      else PInteger(FVals.Objects[i])^:=Integer(Val);
+    end;
+    Result:=true;
+  except
+  end;
+end;
+
+procedure TMemVarHelper.Sort;
+var
+  i:Integer;
+begin
+  if Sorted then exit;
+  FTypes:=TStringList.Create;
+  FVals.Sorted:=true;
+  FVals.Sorted:=false;
+  for i:=0 to Pred(FVals.Count) do
+  begin
+    FTypes.Add(FVals.ValueFromIndex[i]);
+    FVals[i]:=FVals.Names[i];
+  end;
+  FVals.Sorted:=true;
+end;
+
+function TMemVarHelper.Sorted: Boolean;
+begin
+  Result:=FTypes<>nil;
 end;
 
 initialization
