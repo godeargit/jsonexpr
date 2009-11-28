@@ -68,6 +68,10 @@ By creation_zy  (无尽愿)
   Increase the speed of parser.
   Fix bug that can't process "XOR".
   New TMemVarHelper class to access local variables.
+
+2009-11-29
+ver 0.2.2  By creation_zy  (无尽愿)
+  Support collection operations:  + - & | ^ LEN    eg: (1,2,4,8) - (3,4,5) => (1,2,8)
 }
 
 unit UJSONExpr;
@@ -122,6 +126,8 @@ type
     }
     class function JSONToExpr(AObj: JSONObject; ParentOpRank: Integer=-1;
       VarHelper: TJSONVarHelper=nil):String;
+    class function JSONToExpr2(AObj: JSONObject; const Ident: Integer=2;
+      ParentOpRank: Integer=-1; VarHelper: TJSONVarHelper=nil):String;
     class function VarToExprStr(V: Variant):String;
     class function VarNeeded(AObj: JSONObject; var Vars: TStrings):Integer;
   end;
@@ -245,6 +251,7 @@ const
   MathOp1: set of Char=['!', '~'];  //单目运算符
   MathOp2: set of Char=['+', '-', '*', '/', '\', '%', '^', '&', '|', '.', ':', ';'];  //双目运算符
   CompOp2: set of Char=['=', '>', '<'];  //比较运算符
+  NumVarTypes: set of Byte=[varSmallint,varInteger,varSingle,varDouble,varCurrency,varByte,varWord,varLongWord];
 
 
 procedure InitOpRank;
@@ -266,27 +273,42 @@ begin
   OpRank[';']:=r; //Sentence end
 end;
 
-procedure PutVarToJSON(JObj: JSONObject; const VarName: String; const v: Variant);
-begin   
+function VarToJSONObj(v: Variant):TZAbstractObject;
+var
+  i:Integer;
+begin
   case VarType(v) of
     varNull:
-      JObj.Put(VarName,CNULL);
+      Result:=CNULL;
     varSmallInt, varInteger, varShortInt,  varWord:
-      JObj.Put(VarName,Integer(v));
+      Result:=_Integer.create(Integer(v));
     varSingle, varDouble, varCurrency:
-      JObj.Put(VarName,Double(v));
+      Result:=_Double.create(Double(v));
     varDate:
-      JObj.Put(VarName,DateTimeToStr(TDateTime(v)));
+      Result:=_String.create(DateTimeToStr(TDateTime(v)));
     varOleStr:
-      JObj.Put(VarName,String(v));
+      Result:=_String.create(String(v));
     varBoolean:
-      JObj.Put(VarName,Boolean(v));
+      Result:=_Boolean.create(Boolean(v));
+    varArray..varArray+varAny:
+    begin
+      Result:=JSONArray.create;
+      for i:=VarArrayLowBound(v,1) to VarArrayHighBound(v,1) do
+        JSONArray(Result).put(VarToJSONObj(v[i]));
+    end;
     else
-      JObj.Put(VarName,String(v));
-  end;
+      Result:=_String.create(String(v));
+  end;  
+end;
+
+procedure PutVarToJSON(JObj: JSONObject; const VarName: String; const v: Variant);
+begin
+  JObj.Put(VarName,VarToJSONObj(v));
 end;
 
 function VarFromJSON(Z:TZAbstractObject):Variant;
+var
+  i:Integer;
 begin
   if Z=nil then exit;
   if Z.ClassType=_String then
@@ -297,8 +319,214 @@ begin
     Result:=_Double(Z).doubleValue
   else if Z.ClassType=_Integer then
     Result:=_Integer(Z).intValue
+  else if Z.ClassType=JSONArray then
+  begin
+    with JSONArray(Z) do
+    begin
+      Result:=VarArrayCreate([0,length-1],varVariant);
+      for i:=0 to Pred(length) do
+        Result[i]:=VarFromJSON(get(i));
+    end;
+  end
   else
     Result:=Null;
+end;
+
+function VarCanCompare(const vt1, vt2: Integer):Boolean;
+begin
+  Result:=(vt1=vt2) or ((vt1 in NumVarTypes) and (vt2 in NumVarTypes));
+end;
+
+function CollectionOp(c1,c2:Variant; Op:Char):Variant;
+var
+  i,j,n1,n2,c,vt1,vt2:Integer;
+  ay:array of Boolean;
+  v:Variant;
+  b:Boolean;
+begin
+  if not VarCanCompare(VarType(c2),VarType(c1)) then
+  begin
+    Result:=Null;
+    exit;
+  end;
+  n1:=VarArrayHighBound(c1,1);
+  n2:=VarArrayHighBound(c2,1);
+  case Op of
+    '+': //简单拼接，不考虑重复的情况
+    begin
+      Result:=VarArrayCreate([0,n1+n2+1],varVariant);
+      for i:=0 to n1 do
+        Result[i]:=c1[i];
+      for i:=1 to n2+1 do
+        Result[i+n1]:=c2[i-1];
+    end;
+    '-': //从c1中扣除在c2内的元素
+    begin
+      SetLength(ay,n1);
+      c:=0;
+      for i:=0 to n1 do
+      begin
+        b:=false;
+        v:=c1[i];
+        for j:=0 to n2 do
+        begin
+          if VarCanCompare(VarType(v),VarType(c2[j])) then
+            if v=c2[j] then
+            begin
+              b:=true;
+              Inc(c);
+              break;
+            end;
+        end;
+        ay[i]:=b;
+      end;
+      Result:=VarArrayCreate([0,n1-c],varVariant);
+      c:=0;
+      for i:=0 to n1 do
+      begin
+        if not ay[i] then
+        begin
+          Result[c]:=c1[i];
+          Inc(c);
+        end;
+      end;
+      SetLength(ay,0);
+    end;
+    '^': //c1、c2中不在对方内的元素
+    begin
+      SetLength(ay,n1+n2+2);
+      c:=0;
+      for i:=0 to n1 do
+      begin
+        b:=false;
+        v:=c1[i];
+        for j:=0 to n2 do
+        begin
+          if VarCanCompare(VarType(v),VarType(c2[j])) then
+            if v=c2[j] then
+            begin
+              b:=true;
+              Inc(c);
+              break;
+            end;
+        end;
+        ay[i]:=b;
+      end;
+      for i:=0 to n2 do
+      begin
+        b:=false;
+        v:=c2[i];
+        for j:=0 to n1 do
+        begin
+          if VarCanCompare(VarType(v),VarType(c1[j])) then
+            if v=c1[j] then
+            begin
+              b:=true;
+              Inc(c);
+              break;
+            end;
+        end;
+        ay[i+n1+1]:=b;
+      end;
+      Result:=VarArrayCreate([0,n1+n2+1-c],varVariant);
+      c:=0;
+      for i:=0 to n1 do
+      begin
+        if not ay[i] then
+        begin
+          Result[c]:=c1[i];
+          Inc(c);
+        end;
+      end;
+      for i:=0 to n2 do
+      begin
+        if not ay[i+n1+1] then
+        begin
+          Result[c]:=c1[i];
+          Inc(c);
+        end;
+      end;
+      SetLength(ay,0);
+    end;
+    '&': //c1、c2的交集
+    begin
+      SetLength(ay,n1+n2+2);
+      c:=0;
+      for i:=0 to n1 do
+      begin
+        b:=false;
+        v:=c1[i];
+        for j:=0 to n2 do
+        begin
+          if VarCanCompare(VarType(v),VarType(c2[j])) then
+            if v=c2[j] then
+            begin
+              b:=true;
+              Inc(c);
+              break;
+            end;
+        end;
+        ay[i]:=b;
+      end;
+      Result:=VarArrayCreate([0,c-1],varVariant);
+      c:=0;
+      for i:=0 to n1 do
+      begin
+        if ay[i] then
+        begin
+          Result[c]:=c1[i];
+          Inc(c);
+        end;
+      end;
+      SetLength(ay,0);
+    end;
+    '|': //c1、c2的并集
+    begin
+      SetLength(ay,n1+n2+2);
+      c:=0;
+      for i:=0 to n1 do
+      begin
+        b:=false;
+        v:=c1[i];
+        for j:=0 to n2 do
+        begin
+          if VarCanCompare(VarType(v),VarType(c2[j])) then
+            if v=c2[j] then
+            begin
+              b:=true;
+              Inc(c);
+              break;
+            end;
+        end;
+        ay[i]:=b;
+      end;
+      for i:=0 to n2 do
+      begin
+        b:=false;
+        v:=c2[i];
+        ay[i+n1+1]:=b;
+      end;
+      Result:=VarArrayCreate([0,c+n2],varVariant);
+      c:=0;
+      for i:=0 to n1 do
+      begin
+        if ay[i] then
+        begin
+          Result[c]:=c1[i];
+          Inc(c);
+        end;
+      end;
+      for i:=0 to n2 do
+      begin
+        if ay[i+n1+1] then
+        begin
+          Result[c]:=c1[i];
+          Inc(c);
+        end;
+      end;
+      SetLength(ay,0);
+    end;
+  end;
 end;
 
 { TJSONExprParser }
@@ -377,13 +605,41 @@ function TJSONExprParser.Eval(AObj: TZAbstractObject): Variant;
     end
     else begin
       v2:=GetP2;
-      if NullVal then
+      if VarIsArray(v2) then
+      begin
+        for i:=VarArrayLowBound(v2,1) to VarArrayHighBound(v2,1) do
+        begin
+          if NullVal then
+          begin
+            if VarIsNull(v2[i]) then
+              Result:=true;
+          end
+          else if not VarIsNull(v2[i]) then
+            Result:=v1=v2[i];
+          if Result then break;
+        end;
+      end
+      else if NullVal then
       begin
         if VarIsNull(v2) then
           Result:=true;
       end
       else if not VarIsNull(v2) then
         Result:=v1=v2;
+    end;
+  end;
+  function Func_Collection:Variant;
+  var
+    i:Integer;
+    //P:Pointer;
+    v1:Variant;
+  begin
+    Result:=VarArrayCreate([0,JSONObject(AObj).Length-2],varVariant);
+    //P:=VarArrayLock(Result);
+    for i:=1 to Pred(JSONObject(AObj).Length) do
+    begin
+      v1:=GetPN(i);
+      Result[i-1]:=v1;
     end;
   end;
   procedure SetValue;
@@ -408,6 +664,7 @@ var
   v1,v2:Variant;
   Done:Boolean;
   Z:TZAbstractObject;
+  ParamCnt:Integer;
 begin
   Result:=Null;
   if AObj=nil then exit;
@@ -432,7 +689,8 @@ begin
   end;
   with JSONObject(AObj) do
   begin
-    if Length=0 then exit;  //不含任何数据
+    ParamCnt:=Length-1;
+    if ParamCnt<0 then exit;  //不含任何数据
     Z:=ValObjByIndex[0];  //第一个成员，应当是 BIOS_Operator
   end;
   if (Z<>nil) and (Z.ClassType=JSONObject) then  //操作符是JSON对象
@@ -504,11 +762,11 @@ begin
           end;
           v1:=GetP1;
           v2:=GetP2;
-          if (v1=Null) or (v2=Null) then  //两个表达式有一个为空的情况
+          if VarIsNull(v1) or VarIsNull(v2) then  //两个表达式有一个为空的情况
           begin
             if Func[1]='=' then
             begin
-              if (v1=Null) and (v2=Null) then
+              if VarIsNull(v1) and VarIsNull(v2) then
                 Result:=true
               else
                 Result:=false;
@@ -517,25 +775,41 @@ begin
             Result:=Null;
             exit;
           end;
-          case Func[1] of
-            '+': Result:=v1+v2;  //String? Number?
-            '-': Result:=v1-v2;
-            '*': Result:=v1*v2;
-            '/': Result:=v1/v2;
-            '\': Result:=Integer(v1) div Integer(v2);
-            '%': Result:=Integer(v1) mod Integer(v2);
-            '^': Result:=Integer(v1) xor Integer(v2);
-            '&': Result:=Integer(v1) and Integer(v2);
-            '|': Result:=Integer(v1) or Integer(v2);
-            '=': Result:=v1=v2;
-            '>': Result:=v1>v2;
-            '<': Result:=v1<v2;
-            else Done:=false;
-          end;
+          //Collection operation
+          if VarType(v1) and varArray <> 0 then
+          begin
+            case Func[1] of
+              '+','-','^','&','|': Result:=CollectionOp(v1,v2,Func[1]);
+              '=',
+              '>',
+              '<': ;//
+              else Done:=false;
+            end;
+          end
+          else
+            case Func[1] of
+              '+': Result:=v1+v2;  //String? Number?
+              '-': Result:=v1-v2;
+              '*': Result:=v1*v2;
+              '/': Result:=v1/v2;
+              '\': Result:=Integer(v1) div Integer(v2);
+              '%': Result:=Integer(v1) mod Integer(v2);
+              '^': Result:=Integer(v1) xor Integer(v2);
+              '&': Result:=Integer(v1) and Integer(v2);
+              '|': Result:=Integer(v1) or Integer(v2);
+              '=': Result:=v1=v2;
+              '>': Result:=v1>v2;
+              '<': Result:=v1<v2;
+              else Done:=false;
+            end;
         end
         else if Func[1]='!' then
         begin
           Result:=not Integer(GetP1);
+        end
+        else if Func[1]='(' then  //Collection
+        begin
+          Result:=Func_Collection;
         end
         else
           Done:=false;
@@ -618,7 +892,18 @@ begin
               Done:=false;
           'L':
             if Func='LEN' then
-              Result:=Length(String(GetP1))
+            begin
+              v1:=GetP1;
+              if VarType(v1) and varArray <> 0 then  //array length
+              begin
+                if ParamCnt>1 then
+                  Result:=VarArrayHighBound(v1,GetP2)+1
+                else
+                  Result:=VarArrayHighBound(v1,0)+1;
+              end
+              else  //String length
+                Result:=Length(String(GetP1));
+            end
             else
               Done:=false;
           'N':
@@ -845,9 +1130,10 @@ begin
       begin
         v1:=GetP1(Result);
         if Result then
+        begin
           v2:=GetP2(Result);
-        if Result then
           Result:=FuncHelper.GetValue(Self,Func,[v1,v2],v);
+        end;
       end;
       else begin
         va:=GetParams(JSONObject(AObj),Result);
@@ -895,7 +1181,16 @@ var
     while LevelBC[Result]>=BlockCnt do
     begin
       Dec(Result);
-      if Result<0 then break;
+      if Result<0 then
+      begin
+        Inc(Result);
+        break;
+      end;
+      if (LevelBC[Result]<BlockCnt) and not (LevelOpCh[Result] in [OpCh_Func,'(']) then
+      begin
+        Inc(Result);
+        exit;
+      end;
     end;
   end;
   function BlockLevel:Integer;
@@ -1123,7 +1418,7 @@ var
           begin
             //mstr:=JSONObject(JObjs[n]).OptString(BIOS_Operator);
             //if (mstr<>'') and (OpRank[Func[1]]<=OpRank[mstr[1]]) then
-            if (LevelOpCh[n]<>#0) and (OpRank[Func[1]]<=OpRank[LevelOpCh[n]]) then
+            if (LevelOpCh[n]<>OpCh_None) and (OpRank[Func[1]]<=OpRank[LevelOpCh[n]]) then
             begin
               JLevel:=InBlockLevel(OpRank[Func[1]]); //InBlockLevel; //n;
               goto CommonCase;
@@ -1369,7 +1664,28 @@ begin
         ',':
         begin
           JLevel:=FuncLevel;
-          if JLevel<0 then JLevel:=0;
+          if LevelOpCh[JLevel]=OpCh_None then  //逗号
+          begin
+            JSONObject(JObjs[JLevel]).Put(BIOS_Operator,'(');
+            LevelOpCh[JLevel]:='(';
+            Dec(LevelBC[JLevel]);
+          end
+          else if LevelBC[JLevel]=BlockCnt then  //... ? ( A ? B , ...
+          begin  //将纯括号内部的表达式提升到括号的内部
+            AddOp('(',amOperator,true);
+            {if JLevel>=High(JObjs) then break;  //强制跳出
+            JObjs[JLevel+1]:=JObjs[JLevel];
+            JObjs[JLevel]:=JSONObject.Create;
+            with JSONObject(JObjs[JLevel]) do
+            begin
+              Put(BIOS_Operator,'(');
+              Put(BIOS_Param1,JObjs[JLevel+1]);
+            end;
+            LevelOpCh[JLevel]:='(';
+            LevelBC[JLevel+1]:=LevelBC[JLevel];}
+            Dec(LevelBC[JLevel]);
+          end
+          else
           //逗号位于括号内部，并且括号外的操作符不是一般函数（无论单目还是双目算子，右侧都不会有多个参数)
           // -- 将括号内的内容做为集合处理
           if LevelBC[JLevel]<BlockCnt then
@@ -1424,6 +1740,7 @@ begin
         begin
           Inc(BlockCnt);
           AddOp(Ch,amBlock);
+          LevelBC[JLevel]:=BlockCnt-1;
           Inc(I);
           FuncName:='';
           ExprStart:=true;
@@ -1542,6 +1859,93 @@ begin
 end;
 
 class function TJSONExprParser.JSONToExpr(AObj: JSONObject; ParentOpRank: Integer;
+  VarHelper: TJSONVarHelper): String;
+var
+  Func:String;
+  IsCommonFunc:Boolean;
+  OpRk:Integer;
+  function J2Str(Z: TZAbstractObject):String;
+  var
+    v:Variant;
+  begin
+    if Z=nil then
+    begin
+      Result:='';
+      exit;
+    end;
+    if Z.ClassType=JSONObject then
+    begin
+      if IsCommonFunc then  //只有一个参数的普通函数自带括号了
+      begin
+        if ParentOpRank<0 then
+          Result:=JSONToExpr(JSONObject(Z),ParentOpRank,VarHelper)
+        else
+          Result:=JSONToExpr(JSONObject(Z),0,VarHelper)
+      end
+      else
+        Result:=JSONToExpr(JSONObject(Z),OpRk,VarHelper);
+    end
+    else begin
+      Result:=Z.toString;
+      if (Result<>'') and (Z.ClassType=_String) then
+      begin
+        if Result[1]=BIOS_StrParamHeader then  //String
+          Result:=QuotedStr(Copy(Result,2,MaxInt))
+        else begin //Var Name
+          if (VarHelper<>nil) and VarHelper.GetVar(Result,v) then
+          begin
+            Result:=VarToExprStr(v);
+          end;
+        end;
+      end;
+    end;
+  end;
+var
+  i:Integer;
+begin
+  Result:='';
+  if AObj=nil then exit;
+  Func:=AObj.OptString(BIOS_Operator);
+  IsCommonFunc:=(Func='') or not ((Func[1] in MathOp2+CompOp2+['.']+MathOp1) or (Func='AND') or (Func='OR') or (Func='IN') or (Func='IS') or (Func='XOR'));
+  if IsCommonFunc or (ParentOpRank<0) then
+    OpRk:=-1
+  else
+    OpRk:=OpRank[Func[1]];
+  Result:=J2Str(AObj.Opt(BIOS_Param1));
+  if Func='' then exit;
+  if (Func[1] in MathOp2+CompOp2+['.']+MathOp1) or (Func='AND') or (Func='OR') or (Func='IN') or (Func='IS') or (Func='XOR') then
+  begin
+    if Func[1] in MathOp2+CompOp2+['.'] then
+      Result:=Result+Func
+    else if Func[1] in MathOp1 then
+    begin
+      Result:=Func+Result;
+      if (ParentOpRank<0) or (OpRk<ParentOpRank) then
+        Result:='('+Result+')';
+      exit;
+    end
+    else
+      Result:=Result+' '+Func+' ';
+    Result:=Result+J2Str(AObj.Opt(BIOS_ParamHeader+'2'));
+    if (ParentOpRank<0) or (OpRk<ParentOpRank) then
+      Result:='('+Result+')';
+  end
+  else begin
+    for i:=2 to Pred(AObj.Length) do
+      Result:=Result+','+J2Str(AObj.Opt(BIOS_ParamHeader+IntToStr(i)));
+    if Func[1]='[' then
+    begin
+      Result:='['+Result+']';
+      exit;
+    end;
+    Result:='('+Result+')';
+    if Func<>'(' then  //集合以 "(" 做为操作符
+      Result:=Func+Result;
+  end;
+end;
+
+class function TJSONExprParser.JSONToExpr2(AObj: JSONObject;
+  const Ident: Integer; ParentOpRank: Integer;
   VarHelper: TJSONVarHelper): String;
 var
   Func:String;
@@ -2026,53 +2430,63 @@ end;
 
 procedure TMemVarHelper.RegBool(const VarName: String; const P: PBoolean);
 begin
+  if FTypes<>nil then exit;
   FVals.AddObject(VarName+'=B',TObject(P));
 end;
 
 procedure TMemVarHelper.RegByte(const VarName: String; const P: PByte);
 begin
+  if FTypes<>nil then exit;
   FVals.AddObject(VarName+'=Y',TObject(P));
 end;
 
 procedure TMemVarHelper.RegChar(const VarName: String; const P: PChar);
 begin
+  if FTypes<>nil then exit;
   FVals.AddObject(VarName+'=C',TObject(P));
 end;
 
 procedure TMemVarHelper.RegDouble(const VarName: String; const P: PDouble);
-begin                                      
+begin
+  if FTypes<>nil then exit;                
   FVals.AddObject(VarName+'=D',TObject(P));
 end;
 
 procedure TMemVarHelper.RegInt(const VarName: String; const P: PInteger);
 begin
+  if FTypes<>nil then exit;
   FVals.AddObject(VarName+'=I',TObject(P));
 end;
 
 procedure TMemVarHelper.RegInt64(const VarName: String; const P: PInt64);
 begin
+  if FTypes<>nil then exit;
   FVals.AddObject(VarName+'=6',TObject(P));
 end;
 
 procedure TMemVarHelper.RegLongWord(const VarName: String;
   const P: PLongWord);
 begin
+  if FTypes<>nil then exit;
   FVals.AddObject(VarName+'=L',TObject(P));
 end;
 
 procedure TMemVarHelper.RegShortInt(const VarName: String;
   const P: PShortInt);
 begin
+  if FTypes<>nil then exit;
   FVals.AddObject(VarName+'=i',TObject(P));
 end;
 
 procedure TMemVarHelper.RegSingle(const VarName: String; const P: PSingle);
 begin
+  if FTypes<>nil then exit;
   FVals.AddObject(VarName+'=F',TObject(P));
 end;
 
 procedure TMemVarHelper.RegWord(const VarName: String; const P: PWord);
 begin
+  if FTypes<>nil then exit;
   FVals.AddObject(VarName+'=W',TObject(P));
 end;
 
