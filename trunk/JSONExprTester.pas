@@ -301,13 +301,33 @@ begin
         Result:=false;
         Msg:=Msg+#13#10+(mstr+#13#10'=>'#9+toString2(2));
       end;
-      if JSONToExpr(J)<>'DATEPART(day,GETDATE())' then
+      s1:=JSONToExpr(J);
+      if s1<>'DATEPART(day,GETDATE())' then
+      begin
+        Result:=false;
+        Msg:=Msg+#13#10+mstr+' => '+s1;
+      end;
+      Free;
+    end;
+    //collection and array test
+    (*mstr:='C:=(1,1+2); a:=[0,1+1]; IF((1+a[1]) in C,a[1],-a[2])';
+    J:=ExprToJSON(mstr);
+    with J do
+    begin
+      if toString<>'{op:"DATEPART",p1:"day",p2:{op:"GETDATE"}}' then
+      begin
+        Result:=false;
+        Msg:=Msg+#13#10+(mstr+#13#10'=>'#9+toString2(2));
+      end;
+      s1:=JSONToExpr(J);
+      if s1<>'DATEPART(day,GETDATE())' then
       begin
         Result:=false;
         Msg:=Msg+#13#10+(JSONToExpr(J));
       end;
       Free;
     end;
+    *)
   end;
   //Eval Test
   VHelper.Clean;
