@@ -72,6 +72,8 @@ By creation_zy  (无尽愿)
 2009-11-29
 ver 0.2.2  By creation_zy  (无尽愿)
   Support collection operations:  + - & | ^ LEN    eg: (1,2,4,8) - (3,4,5) => (1,2,8)
+  Support scientific number:  1.02E-4
+  Add conditional define to customize the function of parser.
 }
 
 unit UJSONExpr;
@@ -80,6 +82,13 @@ interface
 
 uses
   SysUtils, Classes, Variants, uJSON;
+
+// If the parser is too complex for you, you can remove some function from it.
+// -- Just use the conditonal define below.
+//{$DEFINE NO_IF}
+//{$DEFINE NO_COLLECTION}
+//{$DEFINE NO_ASSIGNMENT}
+//{$DEFINE NO_TRACE}
 
 const
   BIOS_Operator='op';
@@ -94,6 +103,10 @@ type
   TJSONFuncHelper=class;
   { Expression Parser/Evaluator/Analyser 表达式解析/计算/分析器
     可以将类似 (X+3)*Y 的文本表达式解析为JSON对象，并可以对这个JSON对象进行计算求值
+    语句求值规则：
+      运算/比较表达式的值就是该表达式的结果  eg:  (2+3)*4  =>  20    IF(1>=0,1,0)  =>  1
+      赋值语句的值是位于右侧的值表达式的值   eg:  X:=80+100  =>  180
+      多个语句的值，是最后被执行的语句的值   eg:  X:=2; Y:=12; Y<<X;  =>  48
   }
   TJSONExprParser=class
   private
@@ -139,6 +152,8 @@ type
   private
     FNextHelper: TJSONVarHelper;
     procedure SetNextHelper(const Value: TJSONVarHelper);
+    function GetAsJSONString: String;
+    procedure SetAsJSONString(const Value: String);
   protected
     function GetVarNames(const Idx: Integer): String; virtual;
     function GetVarCount: Integer; virtual;
@@ -147,6 +162,7 @@ type
   public
     property NextHelper: TJSONVarHelper read FNextHelper write SetNextHelper;
     property TraceOnSet:Boolean read GetTraceOnSet write SetTraceOnSet;
+    property AsJSONString:String read GetAsJSONString write SetAsJSONString;
     //对变量名进行规范化
     function CheckAndTransName(var VarName: String):Boolean; virtual;
     //Read Value
@@ -233,6 +249,8 @@ type
     destructor Destroy; override;
   end;
 
+function VarEqual(const v1, v2: Variant):Boolean;
+
 implementation
 
 type
@@ -260,7 +278,7 @@ var
 begin                                                     
   OpRank[OpCh_Func]:=255;  //Function
   r:=240;
-  OpRank['(']:=r; OpRank['[']:=r; OpRank[']']:=r; OpRank['.']:=r; Dec(r,20);
+  OpRank['(']:=r; OpRank['[']:=r; OpRank['.']:=r; Dec(r,20);
   OpRank['!']:=r; OpRank['~']:=r; OpRank['N']:=r; Dec(r,20);  //NOT
   OpRank['*']:=r; OpRank['/']:=r; OpRank['\']:=r; OpRank['%']:=r; Dec(r,20);
   OpRank['+']:=r; OpRank['-']:=r; Dec(r,20);
@@ -339,7 +357,7 @@ end;
 
 function CollectionOp(c1,c2:Variant; Op:Char):Variant;
 var
-  i,j,n1,n2,c,vt1,vt2:Integer;
+  i,j,n1,n2,c:Integer;
   ay:array of Boolean;
   v:Variant;
   b:Boolean;
@@ -527,6 +545,116 @@ begin
       SetLength(ay,0);
     end;
   end;
+end;
+
+function CollectionCompare(c1,c2:Variant; const Op: String):Boolean;
+var
+  i,j,n1,n2:Integer;
+  v:Variant;
+  b:Boolean;
+begin
+  if not VarCanCompare(VarType(c2),VarType(c1)) or (Op='') then
+  begin
+    Result:=false;
+    exit;
+  end;
+  n1:=VarArrayHighBound(c1,1);
+  n2:=VarArrayHighBound(c2,1);
+  case Op[1] of
+    '=':
+    begin
+      Result:=(n1=n2) and (Length(Op)=1);
+      if not Result then exit;
+      for i:=0 to n1 do
+      begin
+        v:=c1[i];
+        b:=false;
+        for j:=0 to n2 do
+        begin
+          if VarEqual(v,c2[j]) then
+          begin
+            b:=true;
+            break;
+          end;
+        end;
+        if not b then
+        begin
+          Result:=false;
+          exit;
+        end;
+      end;
+    end;
+    '>':
+    begin
+      if (Length(Op)>1) and (Op<>'>=') then
+      begin
+        Result:=false;
+        exit;
+      end;
+      Result:=true;
+      for i:=0 to n2 do
+      begin
+        v:=c2[i];
+        b:=false;
+        for j:=0 to n1 do
+        begin
+          if VarEqual(v,c1[j]) then
+          begin
+            b:=true;
+            break;
+          end;
+        end;
+        if not b then
+        begin
+          Result:=false;
+          exit;
+        end;
+      end;
+      if Op<>'>=' then
+        Result:=Result and (n1>n2);
+    end;
+    '<':
+    begin
+      if (Length(Op)>1) and (Op<>'<=') then
+      begin
+        Result:=false;
+        exit;
+      end;
+      Result:=true;
+      for i:=0 to n1 do
+      begin
+        v:=c1[i];
+        b:=false;
+        for j:=0 to n2 do
+        begin
+          if VarEqual(v,c2[j]) then
+          begin
+            b:=true;
+            break;
+          end;
+        end;
+        if not b then
+        begin
+          Result:=false;
+          exit;
+        end;
+      end;
+      if Op<>'<=' then
+        Result:=Result and (n1<n2);
+    end;
+    else
+      Result:=false;
+  end;
+end;
+
+function VarEqual(const v1, v2: Variant):Boolean;
+begin
+  Result:=VarCanCompare(VarType(v1),VarType(v2));
+  if not Result then exit;
+  if VarIsArray(v1) then
+    Result:=CollectionCompare(v1,v2,'=')
+  else
+    Result:=v1=v2;
 end;
 
 { TJSONExprParser }
@@ -735,28 +863,34 @@ begin
             if JSONObject(AObj).Length>2 then
             begin
               Result:=GetP1;
+            {$IFNDEF NO_TRACE}
               if TraceOnLine then
               begin
                 Z:=JSONObject(AObj).Opt(BIOS_Param1);
                 if Assigned(FOnLineComplete) then
                   FOnLineComplete(Self,JSONObject(Z),Result);
               end;
+            {$ENDIF}
               Result:=GetP2;
+            {$IFNDEF NO_TRACE}
               if TraceOnLine then
               begin
                 Z:=JSONObject(AObj).Opt(BIOS_ParamHeader+'2');
                 if Assigned(FOnLineComplete) then
                   FOnLineComplete(Self,JSONObject(Z),Result);
               end;
+            {$ENDIF}
             end
             else begin
               Result:=GetP1;
+            {$IFNDEF NO_TRACE}
               if TraceOnLine then
               begin
                 Z:=JSONObject(AObj).Opt(BIOS_Param1);
                 if Assigned(FOnLineComplete) then
                   FOnLineComplete(Self,JSONObject(Z),Result);
               end;
+            {$ENDIF}
             end;
             exit;
           end;
@@ -775,18 +909,18 @@ begin
             Result:=Null;
             exit;
           end;
+        {$IFNDEF NO_COLLECTION}
           //Collection operation
-          if VarType(v1) and varArray <> 0 then
+          if VarIsArray(v1) then
           begin
             case Func[1] of
               '+','-','^','&','|': Result:=CollectionOp(v1,v2,Func[1]);
-              '=',
-              '>',
-              '<': ;//
+              '=','>','<': Result:=CollectionCompare(v1,v2,Func);//
               else Done:=false;
             end;
           end
           else
+        {$ENDIF}
             case Func[1] of
               '+': Result:=v1+v2;  //String? Number?
               '-': Result:=v1-v2;
@@ -818,21 +952,29 @@ begin
       begin
         if Func[1] in CompOp2 then
         begin
+          v1:=GetP1;
+        {$IFNDEF NO_COLLECTION}
+          //Collection operation
+          if VarIsArray(v1) then
+            Result:=CollectionCompare(v1,GetP2,Func)
+          else
+        {$ENDIF}
           if Func='>=' then
-            Result:=GetP1>=GetP2
+            Result:=v1>=GetP2
           else if Func='<=' then
-            Result:=GetP1<=GetP2
+            Result:=v1<=GetP2
           else if Func='<>' then
-            Result:=GetP1<>GetP2
+            Result:=v1<>GetP2
           else if Func='>>' then
-            Result:=Integer(GetP1) shr Integer(GetP2)
+            Result:=Integer(v1) shr Integer(GetP2)
           else if Func='<<' then
-            Result:=Integer(GetP1) shl Integer(GetP2)
+            Result:=Integer(v1) shl Integer(GetP2)
           else
             Done:=false;
         end
         else begin
           case Func[1] of
+          {$IFNDEF NO_ASSIGNMENT}
             ':':
             begin
               if Func[2]='=' then  //:=  Set variable value
@@ -843,9 +985,11 @@ begin
               else
                 Done:=false;
             end;
+          {$ENDIF}
             'I':
             begin
               case Func[2] of
+              {$IFNDEF NO_IF}
                 'F': //IF
                 begin
                   v1:=GetP1;
@@ -855,6 +999,7 @@ begin
                     else
                       Result:=GetP3;
                 end;
+              {$ENDIF}
                 'N': //IN
                 begin
                   Result:=Func_IN;
@@ -894,15 +1039,17 @@ begin
             if Func='LEN' then
             begin
               v1:=GetP1;
-              if VarType(v1) and varArray <> 0 then  //array length
+            {$IFNDEF NO_COLLECTION}
+              if VarIsArray(v1) then  //array length
               begin
                 if ParamCnt>1 then
                   Result:=VarArrayHighBound(v1,GetP2)+1
                 else
                   Result:=VarArrayHighBound(v1,0)+1;
               end
-              else  //String length
-                Result:=Length(String(GetP1));
+              else
+            {$ENDIF}
+                Result:=Length(String(GetP1));  //String length
             end
             else
               Done:=false;
@@ -1596,6 +1743,22 @@ begin
         StrValue:=StrValue + SubString[i];
         Inc(I);
       until not (SubString[I] in Digits+['.']);
+      //Scientific Number. eg:  1.34E-20  9E55
+      if (i<e) and (SubString[I] in ['e','E']) then
+      begin
+        StrValue:=StrValue + SubString[I];
+        Inc(I);
+        if SubString[I] in ['+','-'] then
+        begin
+          StrValue:=StrValue + SubString[i];
+          Inc(i);
+        end;
+        if i<=e then
+          repeat
+            StrValue:=StrValue + SubString[i];
+            Inc(I);
+          until not (SubString[I] in Digits);      
+      end;
       //并不在数字之前的单独的负号  解释为 0 - 
       if StrValue='-' then
       begin
@@ -2132,6 +2295,16 @@ begin
 
 end;
 
+function TJSONVarHelper.GetAsJSONString: String;
+var
+  J:JSONObject;
+begin
+  J:=JSONObject.Create;
+  ValExport(J);
+  Result:=J.toString;
+  J.Free;
+end;
+
 function TJSONVarHelper.GetTraceOnSet: Boolean;
 begin
   Result:=false;
@@ -2168,6 +2341,20 @@ end;
 function TJSONVarHelper.GetVarNames(const Idx: Integer): String;
 begin
   Result:='';
+end;
+
+procedure TJSONVarHelper.SetAsJSONString(const Value: String);
+var
+  J:JSONObject;
+begin
+  try
+    J:=JSONObject.Create(Value);
+  except
+    exit;
+  end;
+  Clean;
+  ValImport(J);
+  J.Free;
 end;
 
 procedure TJSONVarHelper.SetNextHelper(const Value: TJSONVarHelper);
