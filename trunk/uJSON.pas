@@ -35,8 +35,8 @@ uses
 
 Type
   TZAbstractObject = class
-    function equals(const Value: TZAbstractObject): Boolean; virtual;
-    function hash: LongInt;
+    function Equals(const Value: TZAbstractObject): Boolean; virtual;
+    function Hash: LongInt;
     function Clone: TZAbstractObject; virtual;
     function toString: string; virtual;
     function instanceOf(const Value: TZAbstractObject): Boolean;
@@ -149,9 +149,9 @@ Type
     procedure AssignTo(json: JSONObject);
 
     function ToJSONArray (names : JSONArray) : JSONArray;
-    function ToString (): string ; overload; override;
-    function ToString2 (indentFactor : integer): string; overload;
-    function ToString3 (indentFactor, indent : integer): string; overload;
+    function toString (): string ; overload; override;
+    function toString2 (indentFactor : integer): string; overload;
+    function toString3 (indentFactor, indent : integer): string; overload;
 
     //Add by creation_zy  2008-10-21
     property PropValues[const Key: String]:String read GetPropValues write SetPropValues; default;
@@ -185,11 +185,11 @@ Type
 
   JSONArray = class (TZAbstractObject)
   public
-    destructor destroy ; override;
-    constructor create ; overload;
-    constructor create (collection : TList); overload;
-    constructor create (x : JSONTokener); overload;
-    constructor create (const s : string);  overload;
+    destructor Destroy ; override;
+    constructor Create ; overload;
+    constructor Create (collection : TList); overload;
+    constructor Create (x : JSONTokener); overload;
+    constructor Create (const s : string);  overload;
 
     procedure Clean;  //by creation_zy  2009-08-19
     function Clone : TZAbstractObject; override;  //by creation_zy  2008-10-05
@@ -249,7 +249,7 @@ Type
     constructor create (b : boolean);
     function boolValue : Boolean;  //By creation_zy  2008-10-06
     function toString () : string; override;
-    function clone :TZAbstractObject;  override;
+    function Clone :TZAbstractObject;  override;
   private
     fvalue : boolean;
   end;
@@ -262,7 +262,7 @@ Type
     function intValue : integer;  override;
     function toString () : string ; override;
     class function NaN : double;
-    function clone :TZAbstractObject; override;
+    function Clone :TZAbstractObject; override;
   private
     fvalue : double;
   end;
@@ -277,7 +277,7 @@ Type
     function doubleValue : double; override;
     function intValue : integer;  override;
     function toString () : string; override;
-    function clone :TZAbstractObject; override;
+    function Clone :TZAbstractObject; override;
   private
     fvalue : integer;
   end;
@@ -291,7 +291,7 @@ Type
     function equalsIgnoreCase (const s: string) : boolean;
     function Equals(const Value: TZAbstractObject): Boolean; override;
     function toString() : string; override;
-    function clone :TZAbstractObject; override;
+    function Clone :TZAbstractObject; override;
     property AsString: String read GetAsString write SetAsString;  //By creation_zy  2009-11-22
   private
     fvalue : string;
@@ -608,7 +608,7 @@ begin
       begin
         c := next();
         case (c) of
-          {'b': // é o backspace = #8
+          {'b': // ?o backspace = #8
             sb.append('\b');
             break;}
           'b':  //By creation_zy  2009-08-20
@@ -1057,7 +1057,7 @@ begin
   end
   else begin
     a:=JSONArray.create;
-    a.put(o.clone);
+    a.put(o.Clone);
     a.put(value);
     put(key, a);
   end;
@@ -2031,14 +2031,14 @@ begin
   try
     for i := 0 to _keys.Count -1 do
     begin
-      json.put (_keys[i],get(_keys[i]).clone);
+      json.put (_keys[i],get(_keys[i]).Clone);
     end;
   finally
    _keys.free;
   end;
 end;
 
-function JSONObject.clone: TZAbstractObject;
+function JSONObject.Clone: TZAbstractObject;
 begin
   Result := JSONObject.create (self.toString());
 end;
@@ -2354,7 +2354,7 @@ begin
   Result := fvalue;
 end;
 
-function _Boolean.clone: TZAbstractObject;
+function _Boolean.Clone: TZAbstractObject;
 begin
   Result := _Boolean.create(Self.fvalue);
 end;
@@ -2394,7 +2394,7 @@ end;
 
 { _String }
 
-function _String.clone: TZAbstractObject;
+function _String.Clone: TZAbstractObject;
 begin
   Result := _String.create (self.fvalue);
 end;
@@ -2444,7 +2444,7 @@ begin
   fvalue := i;
 end;
 
-function _Integer.clone: TZAbstractObject;
+function _Integer.Clone: TZAbstractObject;
 begin
   Result := _Integer.create (self.fvalue);
 end;
@@ -2512,7 +2512,7 @@ begin
 end;
 
 
-function _Double.clone: TZAbstractObject;
+function _Double.Clone: TZAbstractObject;
 begin
   Result := _Double.create (Self.fvalue);
 end;
