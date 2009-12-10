@@ -230,6 +230,7 @@ Type
     function toString3 (indentFactor, indent : integer) : string; overload;
     function toList () : TList;
     function appendJSONArray( value : JSONArray): Integer ;  //2008-10-08
+    procedure Assign( Source: JSONArray);
   private
     myArrayList : TList;
   end;
@@ -2275,11 +2276,14 @@ end;
 procedure JSONObject.CleanKey(const Key: String);
 var
   i:Integer;
+  JObj:TZAbstractObject;
 begin
   i:=myHashMap.IndexOf(key);
   if i<0 then exit;
-  TZAbstractObject(myHashMap.Objects[i]).Free;
+  JObj:=TZAbstractObject(myHashMap.Objects[i]);
   myHashMap.delete(i);
+  if (JObj<>CONST_FALSE) and (JObj<>CONST_TRUE) and (JObj<>CNULL) then
+    JObj.Free;
 end;
 
 procedure JSONObject.UpdateByTokener(x: JSONTokener);
@@ -2656,6 +2660,12 @@ begin
   inherited;
 end;
 
+procedure JSONArray.Assign(Source: JSONArray);
+begin
+  Clean;
+  appendJSONArray(Source);
+end;
+
 procedure JSONArray.Clean;
 var
   i : integer;
@@ -2667,6 +2677,7 @@ begin
     if (obj <> CONST_FALSE) and (obj <> CONST_TRUE) and (obj <> CNULL) then
       obj.Free;
   end;
+  myArrayList.Clear;  //2009-12-10  By creation_zy
 end;
 
 function JSONArray.Clone: TZAbstractObject;
