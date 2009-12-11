@@ -167,7 +167,7 @@ Type
     procedure SetCascadeValue(const Value: String; const Keys: array of String);
     function GetCascadeValObj(const Keys: array of String): TZAbstractObject;
     //procedure MigrateFrom(Source: JSONObject; IgnoreEqual: Boolean=true);
-    function GetDiffFrom(Source: JSONObject):JSONObject;
+    function GetDiffFrom(Source: JSONObject; UseSrc: Boolean=true):JSONObject;
     procedure Delete(index: Integer);
     procedure RemoveByKeyHeader(const Header: String='~');
     procedure CleanKey(const Key: String);
@@ -301,6 +301,7 @@ Type
   _NULL = class (TZAbstractObject)
     function Equals(const Value: TZAbstractObject): Boolean; override;
     function toString() : string; override;
+    function Clone :TZAbstractObject; override;  //By creation_zy  2009-12-11
   end;
 
 function IsConstJSON(Z: TObject):Boolean;
@@ -2107,17 +2108,55 @@ begin
   end;
 end;
 
-function JSONObject.GetDiffFrom(Source: JSONObject): JSONObject;
+function JSONObject.GetDiffFrom(Source: JSONObject; UseSrc: Boolean): JSONObject;
 var
+  sl:TStrings;
   i:Integer;
+  mstr:String;
+  z,sz:TZAbstractObject;
 begin
-  Result:=Create;
-  with Source.Keys do
+  Result:=JSONObject.Create;
+  if UseSrc then
+    sl:=Source.Keys
+  else
+    sl:=Keys;
+  with sl do
   begin
     for i:=0 to Pred(Count) do
     begin
-      if Source.PropValues[Strings[i]]=PropValues[Strings[i]] then continue;
-      Result.PropValues[Strings[i]]:=Source.PropValues[Strings[i]];
+      mstr:=Strings[i];
+      if UseSrc then
+      begin
+        z:=Self.Opt(mstr);
+        sz:=Source.ValObjByIndex[i];
+        if z=nil then
+        begin
+          Result.Put(mstr,sz.Clone);
+          continue;
+        end;
+      end
+      else begin
+        sz:=Source.Opt(mstr);
+        z:=Self.ValObjByIndex[i];  
+        if sz=nil then
+        begin
+          Result.Put(mstr,z.Clone);
+          continue;
+        end;    
+      end;
+      if sz.ClassType=z.ClassType then
+      begin
+        if sz.toString=z.toString then continue;
+        if sz.ClassType=JSONObject then
+        begin
+          Result.Put(mstr,JSONObject(z).GetDiffFrom(JSONObject(sz),UseSrc));
+          continue;
+        end;
+      end;
+      if UseSrc then
+        Result.Put(mstr,sz.Clone)
+      else if z<>nil then           
+        Result.Put(mstr,z.Clone);
     end;
     Free;
   end;
@@ -3370,6 +3409,11 @@ end;
 
 
 { _NULL }
+
+function _NULL.Clone: TZAbstractObject;
+begin
+  Result:=CNULL;
+end;
 
 function _NULL.Equals(const Value: TZAbstractObject): Boolean;
 begin
