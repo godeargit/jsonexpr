@@ -2155,7 +2155,7 @@ begin
       end;
       if UseSrc then
         Result.Put(mstr,sz.Clone)
-      else if z<>nil then           
+      else if z<>nil then  //应当考虑数组的情况...         
         Result.Put(mstr,z.Clone);
     end;
     Free;
