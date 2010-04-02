@@ -1,5 +1,5 @@
 {
-  Copyright 2009  creation_zy
+  Copyright 2009,2010  creation_zy
   creation_zy@sina.com
 
   This library is free software; you can redistribute it and/or
@@ -74,6 +74,11 @@ ver 0.2.2  By creation_zy  (无尽愿)
   Support collection operations:  + - & | ^ LEN    eg: (1,2,4,8) - (3,4,5) => (1,2,8)
   Support scientific number:  1.02E-4
   Add conditional define to customize the function of parser.
+
+2010-04-02
+ver 0.2.3  By creation_zy  (无尽愿)
+  Support variable name surround with "
+  Support operator ! and ~
 }
 
 unit UJSONExpr;
@@ -95,6 +100,7 @@ const
   BIOS_ParamHeader='p';
   BIOS_Param1='p1';
   BIOS_StrParamHeader='''';    //为了将字符串与变量名相区别，所有字符串值均带单引号前缀
+  BIOS_VarTag='"';             //支持由"包围的变量名，如 "No.1 Var", ":-)", "He ""!""" ——变量名不能以'开头
 type
   TTraceLineFunc=procedure (Sender: TObject; LineData: TZAbstractObject; const LineVal: Variant);
   TTraceValueFunc=procedure (Sender: TObject; const VarName: String; const Val: Variant);
@@ -251,6 +257,10 @@ type
 
 function VarEqual(const v1, v2: Variant):Boolean;
 
+var
+  DblQuotationAsString:Boolean=false;    //是否将双引号内的内容当成字符串
+  UpperCaseNormalFuncName:Boolean=true;  //是否将一般的函数名转换成大写（引号内的函数名不做处理）
+
 implementation
 
 type
@@ -289,6 +299,17 @@ begin
   OpRank['I']:=r; Dec(r,20);  //IN IS
   OpRank[':']:=r; OpRank[',']:=r; Dec(r,20);  //:=
   OpRank[';']:=r; //Sentence end
+end;
+
+function IsNormalVarName(const Name: String):Boolean;
+var
+  i:Integer;
+begin
+  Result:=false;
+  if (Name='') or not (Name[1] in VarBegin) then exit;  
+  for i:=2 to Length(Name) do
+    if not (Name[i] in VarBody) then exit;
+  Result:=true;
 end;
 
 function VarToJSONObj(v: Variant):TZAbstractObject;
@@ -782,7 +803,7 @@ function TJSONExprParser.Eval(AObj: TZAbstractObject): Variant;
       begin
         mstr:=Z.toString;
         if mstr='' then exit;
-        if mstr[1] in VarBegin then
+        if mstr[1]<>BIOS_StrParamHeader {in VarBegin} then
           VarHelper.SetVar(mstr,Result);
       end;
     end;
@@ -938,6 +959,10 @@ begin
             end;
         end
         else if Func[1]='!' then
+        begin
+          Result:=not Boolean(GetP1);
+        end
+        else if Func[1]='~' then
         begin
           Result:=not Integer(GetP1);
         end
@@ -1135,7 +1160,7 @@ function TJSONExprParser.EvalNumber(AObj: TZAbstractObject; out Val: Double):Boo
       begin
         mstr:=Z.toString;
         if mstr='' then exit;
-        if mstr[1] in VarBegin then
+        if mstr[1]<>BIOS_StrParamHeader {in VarBegin} then
           VarHelper.SetVar(mstr,Val);
       end;
     end;
@@ -1786,7 +1811,9 @@ begin
       else if NextIsBlockBegin(I) or (FuncName='NOT') then
       begin
         if not NextIsBlockBegin(I) then
-          AddOp(FuncName,amFunc);
+          AddOp(FuncName,amFunc)
+        else if not UpperCaseNormalFuncName then  //还原成未大写的状态  2010-04-02
+          FuncName:=StrValue;
       end
       else if (FuncName='TRUE') or (FuncName='FALSE') or (FuncName='NULL') then  //布尔值或NULL
       begin
@@ -1949,6 +1976,49 @@ begin
           end;
           WriteStr(StrValue);
         end;
+        '"':  //2010-04-02
+        begin
+          ExprStart:=false;
+          Inc(i);
+          while i<=e do
+          begin
+            if SubString[i]='"' then
+            begin
+              Inc(i);
+              if (i<=e) and (SubString[i]='"') then
+              begin
+                StrValue:=StrValue+'"';
+                Inc(i);
+              end
+              else
+                break;
+            end
+            else begin
+              StrValue:=StrValue+SubString[i];
+              Inc(i);
+            end;
+          end;
+          if DblQuotationAsString then  //将双引号内的内容当成普通字符串
+          begin
+            WriteStr(StrValue);
+          end
+          else begin
+            FuncName:=StrValue;
+            if NextIsBlockBegin(I) then
+            begin
+              if not NextIsBlockBegin(I) then
+                AddOp(FuncName,amFunc);
+            end
+            else begin  //非关键字
+              if not WriteVar(StrValue) then  //将第二个 "变量" 当成操作符
+              begin
+                if JLevel>=High(JObjs) then break;  //强制跳出
+                AddOp(FuncName,amOperator,true);
+              end;
+              FuncName:='';
+            end;
+          end;
+        end;
         '#':  //Allow #123 in String
         begin
           CW:=0;
@@ -2058,7 +2128,9 @@ var
           if (VarHelper<>nil) and VarHelper.GetVar(Result,v) then
           begin
             Result:=VarToExprStr(v);
-          end;
+          end
+          else if not IsNormalVarName(Result) then  //2010-04-02
+            Result:='"'+StringReplace(Result,'"','""',[rfReplaceAll])+'"';
         end;
       end;
     end;
