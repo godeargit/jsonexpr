@@ -79,6 +79,10 @@ ver 0.2.2  By creation_zy  (无尽愿)
 ver 0.2.3  By creation_zy  (无尽愿)
   Support variable name surround with "
   Support operator ! and ~
+
+2010-04-03
+ver 0.3.0  By creation_zy  (无尽愿)
+  Support record or object member    eg: P1.X  Score1.(100+Max-Min)
 }
 
 unit UJSONExpr;
@@ -94,11 +98,14 @@ uses
 //{$DEFINE NO_COLLECTION}
 //{$DEFINE NO_ASSIGNMENT}
 //{$DEFINE NO_TRACE}
+{$DEFINE NO_RECMEMBER}
+//{$DEFINE NO_COMPLEXOBJ}
 
 const
   BIOS_Operator='op';
   BIOS_ParamHeader='p';
   BIOS_Param1='p1';
+  BIOS_Param2='p2';
   BIOS_StrParamHeader='''';    //为了将字符串与变量名相区别，所有字符串值均带单引号前缀
   BIOS_VarTag='"';             //支持由"包围的变量名，如 "No.1 Var", ":-)", "He ""!""" ——变量名不能以'开头
 type
@@ -173,11 +180,23 @@ type
     function CheckAndTransName(var VarName: String):Boolean; virtual;
     //Read Value
     function GetVar(const VarName: String; out Val: Variant):Boolean; virtual;
+  {$IFNDEF NO_RECMEMBER}
     function GetVar2(AObj: JSONObject; out Val: Variant):Boolean; virtual;
+  {$ENDIF}
+    function GetVarObj(const VarName: String; out Obj: JSONObject):Boolean; virtual;
     function GetVarDef(const VarName: String; const Default: Variant):Variant;
     //Write Value
     function SetVar(const VarName: String; const Val: Variant):Boolean; virtual;
+  {$IFNDEF NO_RECMEMBER}
     function SetVar2(AObj: JSONObject; const Val: Variant):Boolean; virtual;
+  {$ENDIF}
+  {$IFNDEF NO_COMPLEXOBJ}
+    //Member support
+    function EnterObj(const ObjName: String):Boolean; virtual;
+    function LeaveObj(const ObjName: String):Boolean; virtual;
+  {$ENDIF}
+    function VarIsObj(const VarName: String):Boolean; virtual;
+    function SetObjectVar(const VarName: String; JObj: JSONObject):Boolean; virtual;
     //
     property VarCount:Integer read GetVarCount;
     property VarNames[const Idx:Integer]:String read GetVarNames;
@@ -206,12 +225,20 @@ type
     FValueHolder:JSONObject;
     FTraceOnSet: Boolean;
     FOnTrace: TTraceValueFunc;
+  {$IFNDEF NO_COMPLEXOBJ}
+    FRootHolder:JSONObject;
+    FValObjStatck:TStrings;
+  {$ENDIF}
     procedure SetOnTrace(const Value: TTraceValueFunc);
   protected
     function GetVarNames(const Idx: Integer): String; override;
     function GetVarCount: Integer; override;
     function GetTraceOnSet: Boolean; override;
     procedure SetTraceOnSet(const Value: Boolean); override;
+  {$IFNDEF NO_COMPLEXOBJ}
+    function ComplexValObjByName(const VarName: String):TZAbstractObject;
+    function ComplexValObjByNameEx(const VarName: String; out AValHolder: JSONObject):TZAbstractObject;
+  {$ENDIF}
   public
     property OnTrace:TTraceValueFunc read FOnTrace write SetOnTrace;
     procedure Put(const VarName: String; V: Boolean); overload;
@@ -222,7 +249,14 @@ type
     procedure Delete(const VarName: String);
     procedure Clean; override;
     function GetVar(const VarName: String; out Val:Variant):Boolean; override;
+    function GetVarObj(const VarName: String; out Obj: JSONObject):Boolean; override;
     function SetVar(const VarName: String; const Val: Variant):Boolean; override;
+    function VarIsObj(const VarName: String):Boolean; override;
+    function SetObjectVar(const VarName: String; JObj: JSONObject):Boolean; override;
+  {$IFNDEF NO_COMPLEXOBJ}
+    function EnterObj(const ObjName: String):Boolean; override;
+    function LeaveObj(const ObjName: String):Boolean; override;
+  {$ENDIF}
     constructor Create;
     destructor Destroy; override;
   end;
@@ -343,6 +377,11 @@ end;
 procedure PutVarToJSON(JObj: JSONObject; const VarName: String; const v: Variant);
 begin
   JObj.Put(VarName,VarToJSONObj(v));
+end;
+
+procedure PutObjToJSON(JObj: JSONObject; const VarName: String; Obj: JSONObject);
+begin
+  JObj.Put(VarName,Obj);
 end;
 
 function VarFromJSON(Z:TZAbstractObject):Variant;
@@ -703,7 +742,7 @@ function TJSONExprParser.Eval(AObj: TZAbstractObject): Variant;
   end;
   function GetP2:Variant;
   begin
-    Result:=Eval(JSONObject(AObj).Opt(BIOS_ParamHeader+'2'));
+    Result:=Eval(JSONObject(AObj).Opt(BIOS_Param2));
   end;
   function GetP3:Variant;
   begin
@@ -793,7 +832,7 @@ function TJSONExprParser.Eval(AObj: TZAbstractObject): Variant;
   end;
   procedure SetValue;
   var
-    Z:TZAbstractObject;
+    Z,Z2:TZAbstractObject;
     mstr:String;
   begin
     Result:=GetP2;  //将右侧表达式的值做为整个赋值过程的值
@@ -805,6 +844,35 @@ function TJSONExprParser.Eval(AObj: TZAbstractObject): Variant;
         if mstr='' then exit;
         if mstr[1]<>BIOS_StrParamHeader {in VarBegin} then
           VarHelper.SetVar(mstr,Result);
+      end
+      else if Z.ClassType=JSONObject then  //赋值表达式的左部是复合表达式  2010-04-04
+      begin
+        mstr:=JSONObject(Z).ValByIndex[0];
+        if mstr='.' then
+        begin
+        {$IFDEF NO_COMPLEXOBJ}
+        {$IFNDEF NO_RECMEMBER}
+          VarHelper.SetVar2(JSONObject(Z),Result);
+        {$ENDIF}
+        {$ELSE}
+          Z2:=JSONObject(Z).Opt(BIOS_Param1);
+          if Z2 is _String then
+          begin
+            with VarHelper do
+            begin
+              if EnterObj(Z2.toString) then
+              begin
+                SetVar(JSONObject(Z).OptString(BIOS_Param2),Result);
+                LeaveObj('');
+              end;
+            end;
+          end
+          else if Z2 is JSONObject then
+          begin
+          
+          end;
+        {$ENDIF}
+        end;
       end;
     end;
   end;
@@ -812,7 +880,7 @@ var
   Func,mstr:String;
   v1,v2:Variant;
   Done:Boolean;
-  Z:TZAbstractObject;
+  Z,Z2:TZAbstractObject;
   ParamCnt:Integer;
 begin
   Result:=Null;
@@ -872,7 +940,24 @@ begin
         if Func[1]='.' then  //something like:  Plan.Max
         begin
           if VarHelper<>nil then
+          begin
+          {$IFDEF NO_COMPLEXOBJ}
+          {$IFNDEF NO_RECMEMBER}
             VarHelper.GetVar2(JSONObject(AObj),Result);
+          {$ENDIF}
+          {$ELSE}
+            Z2:=JSONObject(AObj).Opt(BIOS_Param1);
+            if Z2 is _String then
+            begin
+              with VarHelper do
+                if EnterObj(Z2.toString) then
+                begin
+                  Result:=GetP2;
+                  LeaveObj('');
+                end;
+            end;
+          {$ENDIF}
+          end;
           exit;
         end
         else if Func[1] in (MathOp2+CompOp2) then
@@ -1123,7 +1208,7 @@ function TJSONExprParser.EvalNumber(AObj: TZAbstractObject; out Val: Double):Boo
   end;
   function GetP2(var OK: Boolean):Double;
   begin
-    OK:=EvalNumber(JSONObject(AObj).Opt(BIOS_ParamHeader+'2'),Result);
+    OK:=EvalNumber(JSONObject(AObj).Opt(BIOS_Param2),Result);
   end;
   function GetPN(n:Integer; var OK: Boolean):Double;
   begin
@@ -1251,12 +1336,22 @@ begin
         case Func[1] of
           '.':  //something like:  Plan.Max
           begin
+            (*
             if VarHelper<>nil then
             begin
+            {$IFDEF NO_COMPLEXOBJ}
+            {$IFNDEF NO_RECMEMBER}
               Result:=VarHelper.GetVar2(JSONObject(AObj),v);
-              if Result then
-                Val:=Double(v);
-            end;
+            {$ENDIF}
+            {$ELSE}
+              with VarHelper do
+              begin
+                //if EnterObj('') then
+              end;
+            {$ENDIF}
+            *)
+            if Result then
+              Val:=Double(v);
             exit;
           end;
           else if Func[1]='!' then
@@ -2367,6 +2462,13 @@ begin
 
 end;
 
+{$IFNDEF NO_COMPLEXOBJ}
+function TJSONVarHelper.EnterObj(const ObjName: String): Boolean;
+begin
+  Result:=false;
+end;
+{$ENDIF}
+
 function TJSONVarHelper.GetAsJSONString: String;
 var
   J:JSONObject;
@@ -2390,13 +2492,22 @@ begin
     Result:=false;
 end;
 
+{$IFNDEF NO_RECMEMBER}
 function TJSONVarHelper.GetVar2(AObj: JSONObject; out Val:Variant):Boolean;
+var
+  str1,str2:String;
 begin
   if AObj=nil then
-    Result:=GetVar('',Val)
-  else
-    Result:=GetVar(AObj.OptString(BIOS_Param1),Val);
+    str1:=''
+  else begin
+    str1:=AObj.OptString(BIOS_Param1);
+    str2:=AObj.OptString(BIOS_Param2);
+    if str2<>'' then
+      str1:=str1+'.'+str2;
+  end;
+  Result:=GetVar(str1,Val);
 end;
+{$ENDIF}
 
 function TJSONVarHelper.GetVarCount: Integer;
 begin
@@ -2414,6 +2525,18 @@ function TJSONVarHelper.GetVarNames(const Idx: Integer): String;
 begin
   Result:='';
 end;
+
+function TJSONVarHelper.GetVarObj(const VarName: String; out Obj: JSONObject): Boolean;
+begin
+  Result:=false;
+end;
+
+{$IFNDEF NO_COMPLEXOBJ}
+function TJSONVarHelper.LeaveObj(const ObjName: String): Boolean;
+begin
+  Result:=false;
+end;
+{$ENDIF}
 
 procedure TJSONVarHelper.SetAsJSONString(const Value: String);
 var
@@ -2434,6 +2557,11 @@ begin
   FNextHelper := Value;
 end;
 
+function TJSONVarHelper.SetObjectVar(const VarName: String; JObj: JSONObject): Boolean;
+begin
+  Result:=false;
+end;
+
 procedure TJSONVarHelper.SetTraceOnSet(const Value: Boolean);
 begin
 
@@ -2445,17 +2573,30 @@ begin
   Result:=false;
 end;
 
+{$IFNDEF NO_RECMEMBER}
 function TJSONVarHelper.SetVar2(AObj: JSONObject;
   const Val: Variant): Boolean;
+var
+  str1,str2:String;
 begin
-  Result:=false;
+  if AObj=nil then
+    str1:=''
+  else begin
+    str1:=AObj.OptString(BIOS_Param1);
+    str2:=AObj.OptString(BIOS_Param2);
+    if str2<>'' then
+      str1:=str1+'.'+str2;
+  end;
+  Result:=SetVar(str1,Val);
 end;
+{$ENDIF}
 
 function TJSONVarHelper.ValExport(PlainObj: JSONObject): Integer;
 var
   i:Integer;
   mstr:String;
   v:Variant;
+  Obj:JSONObject;
 begin
   if PlainObj=nil then
   begin
@@ -2467,7 +2608,11 @@ begin
   for i:=0 to Pred(Result) do
   begin
     mstr:=VarNames[i];
-    if not GetVar(mstr,v) then
+    if GetVarObj(mstr,Obj) then
+    begin
+      PutObjToJSON(PlainObj,mstr,Obj);
+    end
+    else if not GetVar(mstr,v) then
       Dec(Result)
     else
       PutVarToJSON(PlainObj,mstr,v);
@@ -2480,6 +2625,7 @@ var
   mstr:String;
   v:Variant;
   Z:TZAbstractObject;
+  JObj:JSONObject;
 begin
   Result:=0;
   if PlainObj=nil then exit;
@@ -2487,13 +2633,23 @@ begin
     for i:=0 to Pred(Length) do
     begin
       Z:=ValObjByIndex[i];
-      if Z.ClassType=JSONObject then continue;
       mstr:=KeyByIndex[i];
       if mstr='' then continue;
+      if Z.ClassType=JSONObject then
+      begin
+        JObj:=JSONObject(Z.Clone);
+        SetObjectVar(mstr,JObj);
+        continue;
+      end;
       v:=VarFromJSON(Z);
       if SetVar(mstr,v) then
         Inc(Result);
     end;
+end;
+
+function TJSONVarHelper.VarIsObj(const VarName: String): Boolean;
+begin
+  Result:=false;
 end;
 
 { TJSONFuncHelper }
@@ -2519,19 +2675,89 @@ end;
 
 procedure TSimpleVarHelper.Clean;
 begin
+{$IFDEF NO_COMPLEXOBJ}
   FValueHolder.Clean;
+{$ELSE}
+  FRootHolder.Clean;
+{$ENDIF}
 end;
+
+{$IFNDEF NO_COMPLEXOBJ}
+function TSimpleVarHelper.ComplexValObjByName(const VarName: String): TZAbstractObject;
+var
+  i:Integer;
+begin
+  with FValObjStatck do
+    for i:=Pred(Count) downto 0 do
+    begin
+      Result:=JSONObject(Objects[i]).Opt(VarName);
+      if Result<>nil then exit;
+    end;
+end;
+
+function TSimpleVarHelper.ComplexValObjByNameEx(const VarName: String;
+  out AValHolder: JSONObject): TZAbstractObject;
+var
+  i:Integer;
+begin
+  with FValObjStatck do
+  begin
+    for i:=Pred(Count) downto 0 do
+    begin
+      AValHolder:=JSONObject(Objects[i]);
+      Result:=AValHolder.Opt(VarName);
+      if Result<>nil then exit;
+    end;
+    AValHolder:=JSONObject(Objects[Count-1]);  //默认为最近的ValObj
+  end;
+end;
+{$ENDIF}
 
 constructor TSimpleVarHelper.Create;
 begin
   FValueHolder:=JSONObject.Create;
+{$IFNDEF NO_COMPLEXOBJ}
+  FRootHolder:=FValueHolder;
+  FValObjStatck:=TStringList.Create;
+  FValObjStatck.AddObject('',FValueHolder);
+{$ENDIF}
 end;
 
 destructor TSimpleVarHelper.Destroy;
 begin
+{$IFDEF NO_COMPLEXOBJ}
   FValueHolder.Free;
+{$ELSE}
+  FRootHolder.Free;
+  FValObjStatck.Free;
+{$ENDIF}
   inherited;
 end;
+
+{$IFNDEF NO_COMPLEXOBJ}
+function TSimpleVarHelper.EnterObj(const ObjName: String): Boolean;
+var
+  Holder:JSONObject;
+  Z:TZAbstractObject;
+begin
+  Z:=ComplexValObjByNameEx(ObjName,Holder);
+  if Z<>nil then
+  begin
+    if not (Z is JSONObject) then
+    begin
+      Result:=false;
+      exit;
+    end;
+    FValueHolder:=JSONObject(Z);
+  end
+  else begin
+    FValueHolder:=JSONObject.Create;
+    Holder.Put(ObjName,FValueHolder);
+  end;
+  FValObjStatck.AddObject(ObjName,FValueHolder);
+  Result:=true;
+end;
+{$ENDIF}
 
 procedure TSimpleVarHelper.Delete(const VarName: String);
 begin
@@ -2548,7 +2774,11 @@ function TSimpleVarHelper.GetVar(const VarName: String;
 var
   Z:TZAbstractObject;
 begin
+{$IFDEF NO_COMPLEXOBJ}
   Z:=FValueHolder.Opt(VarName);
+{$ELSE}
+  Z:=ComplexValObjByName(VarName);
+{$ENDIF}
   if Z=nil then
   begin
     Result:=false;
@@ -2560,13 +2790,53 @@ end;
 
 function TSimpleVarHelper.GetVarCount: Integer;
 begin
+{$IFDEF NO_COMPLEXOBJ}
   Result:=FValueHolder.Length;
+{$ELSE}
+  Result:=FRootHolder.Length;
+{$ENDIF}
 end;
 
 function TSimpleVarHelper.GetVarNames(const Idx: Integer): String;
 begin
+{$IFDEF NO_COMPLEXOBJ}
   Result:=FValueHolder.KeyByIndex[Idx];
+{$ELSE}
+  Result:=FRootHolder.KeyByIndex[Idx];
+{$ENDIF}
 end;
+
+function TSimpleVarHelper.GetVarObj(const VarName: String; out Obj: JSONObject): Boolean;
+begin
+{$IFDEF NO_COMPLEXOBJ}
+  Obj:=FValueHolder.OptJSONObject(VarName);
+{$ELSE}
+  Obj:=FRootHolder.OptJSONObject(VarName);
+{$ENDIF}
+  Result:=Obj<>nil;
+end;
+
+{$IFNDEF NO_COMPLEXOBJ}
+function TSimpleVarHelper.LeaveObj(const ObjName: String): Boolean;
+begin
+  with FValObjStatck do
+  begin
+    if Count=1 then
+    begin
+      Result:=false;
+      exit;
+    end;
+    if (ObjName='') or (ObjName=Strings[Count-1]) then
+    begin
+      Delete(Count-1);
+      FValueHolder:=JSONObject(Objects[Count-1]);
+      Result:=true;
+      exit;
+    end;
+  end;
+  Result:=false;
+end;
+{$ENDIF}
 
 procedure TSimpleVarHelper.Put(const VarName: String; V: Double);
 begin
@@ -2593,6 +2863,11 @@ begin
   FValueHolder.Put(VarName,CNULL);
 end;
 
+function TSimpleVarHelper.SetObjectVar(const VarName: String; JObj: JSONObject): Boolean;
+begin
+  FValueHolder.Put(VarName,JObj);
+end;
+
 procedure TSimpleVarHelper.SetOnTrace(const Value: TTraceValueFunc);
 begin
   FOnTrace := Value;
@@ -2611,6 +2886,11 @@ begin
       FOnTrace(Self,VarName,Val);
   PutVarToJSON(FValueHolder,VarName,Val);
   Result:=true;
+end;
+
+function TSimpleVarHelper.VarIsObj(const VarName: String): Boolean;
+begin
+  Result:=FValueHolder.Opt(VarName) is JSONObject;
 end;
 
 { TMemVarHelper }
