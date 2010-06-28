@@ -80,9 +80,13 @@ ver 0.2.3  By creation_zy  (无尽愿)
   Support variable name surround with "
   Support operator ! and ~
 
-2010-04-03
+2010-04-04
 ver 0.3.0  By creation_zy  (无尽愿)
   Support record or object member    eg: P1.X  Score1.(100+Max-Min)
+
+2010-06-28
+ver 0.3.1  By creation_zy  (无尽愿)
+  Optimize sentence structure, Support multiple sentence in one Object.
 }
 
 unit UJSONExpr;
@@ -307,6 +311,7 @@ threadvar
 const
   OpCh_None:TOpChar=#0;
   OpCh_Func:TOpChar=#255;
+  OpCh_Sentence:TOpChar=';';
   Digits: set of Char=['0'..'9'];
   VarBegin: set of Char=['a'..'z', 'A'..'Z', '_', '$', '@', #129..#254];  //允许$,@以及汉字
   VarBody: set of Char=['a'..'z', 'A'..'Z', '_', '$', '@', '0'..'9', #129..#254];
@@ -881,7 +886,7 @@ var
   v1,v2:Variant;
   Done:Boolean;
   Z,Z2:TZAbstractObject;
-  ParamCnt:Integer;
+  ParamCnt,i,n:Integer;
 begin
   Result:=Null;
   if AObj=nil then exit;
@@ -966,7 +971,8 @@ begin
           begin
             //尽量获取后面那个表达式的值，如果只有一个表达式，那就获取第一个表达式的值
             //eg:  X:=10; Y:=3; X*Y-9   => 21
-            if JSONObject(AObj).Length>2 then
+            n:=JSONObject(AObj).Length;
+            if n>2 then
             begin
               Result:=GetP1;
             {$IFNDEF NO_TRACE}
@@ -986,6 +992,19 @@ begin
                   FOnLineComplete(Self,JSONObject(Z),Result);
               end;
             {$ENDIF}
+              //允许 ; 表达式有多于两个的参数  2010-6-27
+              for i:=3 to n-1 do
+              begin
+                Result:=GetPN(i);
+              {$IFNDEF NO_TRACE}
+                if TraceOnLine then
+                begin
+                  Z:=JSONObject(AObj).Opt(BIOS_ParamHeader+IntToStr(i));
+                  if Assigned(FOnLineComplete) then
+                    FOnLineComplete(Self,JSONObject(Z),Result);
+                end;
+              {$ENDIF}
+              end;
             end
             else begin
               Result:=GetP1;
@@ -1257,6 +1276,7 @@ var
   v1,v2:Double;
   Done:Boolean;
   Z:TZAbstractObject;
+  i,n:Integer;
 begin
   Result:=false;
   if AObj=nil then exit;
@@ -1301,10 +1321,14 @@ begin
         if Func[1]=';' then
         begin
           //同上
-          if JSONObject(AObj).Length>2 then
+          n:=JSONObject(AObj).Length;
+          if n>2 then
           begin
             GetP1(Result);
             Val:=GetP2(Result);
+            //允许 ; 表达式有多于两个的参数  2010-6-27
+            for i:=3 to n-1 do
+              Val:=GetPN(i,Result);
           end
           else
             Val:=GetP1(Result);
@@ -1745,6 +1769,8 @@ var
       else
         LevelOpCh[JLevel]:=OpCh_None
     end
+    else if (LevelOpCh[JLevel]=OpCh_Sentence) and (Func=';') then  //平级的 ; 号   2010-06-28
+      exit
     else begin
       JN:=NewFuncObj;
       JObjs[JLevel+1]:=JN;
@@ -2257,6 +2283,9 @@ begin
     else
       Result:=Result+' '+Func+' ';
     Result:=Result+J2Str(AObj.Opt(BIOS_ParamHeader+'2'));
+    if Func[1]=OpCh_Sentence then  //支持多个平行语句  2010-06-28
+      for i:=3 to AObj.Length-1 do
+        Result:=Result+Func+J2Str(AObj.Opt(BIOS_ParamHeader+IntToStr(i)));
     if (ParentOpRank<0) or (OpRk<ParentOpRank) then
       Result:='('+Result+')';
   end
