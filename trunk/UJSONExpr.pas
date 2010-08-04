@@ -921,9 +921,9 @@ begin
     begin
       case JSONObject(AObj).Length of
         2: FuncHelper.GetValue2(Self,JSONObject(Z),[GetP1],Result);
-        3: FuncHelper.GetValue2(Self,JSONObject(Z),[GetP2,GetP2],Result);
+        3: FuncHelper.GetValue2(Self,JSONObject(Z),[GetP1,GetP2],Result);
         else
-          FuncHelper.GetValue2(Self,JSONObject(Z),[GetP2,GetP2],Result);
+          FuncHelper.GetValue2(Self,JSONObject(Z),GetParams(JSONObject(AObj)),Result);
       end;
     end;
     exit;
@@ -1211,7 +1211,7 @@ begin
     if FuncHelper<>nil then
       case JSONObject(AObj).Length of
         2: FuncHelper.GetValue(Self,Func,[GetP1],Result);
-        3: FuncHelper.GetValue(Self,Func,[GetP2,GetP2],Result);
+        3: FuncHelper.GetValue(Self,Func,[GetP1,GetP2],Result);
         else
           FuncHelper.GetValue(Self,Func,GetParams(JSONObject(AObj)),Result);
       end;
