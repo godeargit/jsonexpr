@@ -87,6 +87,12 @@ ver 0.3.0  By creation_zy  (无尽愿)
 2010-06-28
 ver 0.3.1  By creation_zy  (无尽愿)
   Optimize sentence structure, Support multiple sentence in one Object.
+
+2010-08-05
+var 0.3.2  By creation_zy  (无尽愿)
+  Add "Inc", "Dec" operator.
+  Implement "While" loop. Support "break" statement.
+  Fix bug in FuncHelper parameter transport.
 }
 
 unit UJSONExpr;
@@ -835,12 +841,12 @@ function TJSONExprParser.Eval(AObj: TZAbstractObject): Variant;
       Result[i-1]:=v1;
     end;
   end;
-  procedure SetValue;
+  procedure SetValue(Val: Variant);
   var
     Z,Z2:TZAbstractObject;
     mstr:String;
   begin
-    Result:=GetP2;  //将右侧表达式的值做为整个赋值过程的值
+    Result:=Val;  //将右侧表达式的值做为整个赋值过程的值
     Z:=JSONObject(AObj).Opt(BIOS_Param1);
     begin
       if Z.ClassType=_String then
@@ -1109,7 +1115,7 @@ begin
               if Func[2]='=' then  //:=  Set variable value
               begin
                 if VarHelper<>nil then
-                  SetValue;
+                  SetValue(GetP2);
               end
               else
                 Done:=false;
@@ -1164,6 +1170,16 @@ begin
               Result:=Boolean(GetP1) and Boolean(GetP2)
             else
               Done:=false;
+          'D':
+            if Func='DEC' then
+              SetValue(GetP1-1)
+            else
+              Done:=false;
+          'I':
+            if Func='INC' then
+              SetValue(GetP1+1)
+            else
+              Done:=false;
           'L':
             if Func='LEN' then
             begin
@@ -1204,6 +1220,34 @@ begin
             Done:=false;
         end;
       end;
+      5:
+      begin
+        case Func[1] of
+          'B':
+            if Func='BREAK' then
+            begin
+              Abort;  //产生哑异常，跳出循环结构
+            end
+            else
+              Done:=false;
+          'W':
+            if Func='WHILE' then
+            begin
+              n:=0;
+              try
+                while Boolean(GetP1) do
+                begin
+                  Inc(n);
+                  GetP2;
+                end;
+              except
+              end;
+              Result:=n;  //循环结构的返回值就是进入循环体的次数
+            end
+            else
+              Done:=false;
+        end;
+      end
       else
         Done:=false;
     end;
@@ -1403,7 +1447,7 @@ begin
       end
       else
         Done:=false;
-    end;
+    end
     else
       Done:=false;
   end;
