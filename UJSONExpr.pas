@@ -89,10 +89,17 @@ ver 0.3.1  By creation_zy  (无尽愿)
   Optimize sentence structure, Support multiple sentence in one Object.
 
 2010-08-05
-var 0.3.2  By creation_zy  (无尽愿)
+ver 0.3.2  By creation_zy  (无尽愿)
   Add "Inc", "Dec" operator.
   Implement "While" loop. Support "break" statement.
   Fix bug in FuncHelper parameter transport.
+
+2010-08-12
+ver 0.3.3  By creation_zy  (无尽愿)
+  Add "For", "Repeat", "Times", "IsNull" statement.
+  Add Line comment "//"
+  Add function "Now"
+  Add type cast function: Int, String, Bool, Float
 }
 
 unit UJSONExpr;
@@ -300,6 +307,8 @@ type
   end;
 
 function VarEqual(const v1, v2: Variant):Boolean;
+function VarToJSONObj(v: Variant):TZAbstractObject;
+function VarFromJSON(Z:TZAbstractObject):Variant;
 
 var
   DblQuotationAsString:Boolean=false;    //是否将双引号内的内容当成字符串
@@ -889,10 +898,11 @@ function TJSONExprParser.Eval(AObj: TZAbstractObject): Variant;
   end;
 var
   Func,mstr:String;
+  Func1:AnsiChar;
   v1,v2:Variant;
   Done:Boolean;
   Z,Z2:TZAbstractObject;
-  ParamCnt,i,n:Integer;
+  ParamCnt,i,n,c:Integer;
 begin
   Result:=Null;
   if AObj=nil then exit;
@@ -943,12 +953,13 @@ begin
     Result:=GetP1;
     exit;
   end;
+  Func1:=Func[1];
   try
     Done:=true;
     case Length(Func) of
       1:
       begin
-        if Func[1]='.' then  //something like:  Plan.Max
+        if Func1='.' then  //something like:  Plan.Max
         begin
           if VarHelper<>nil then
           begin
@@ -971,9 +982,9 @@ begin
           end;
           exit;
         end
-        else if Func[1] in (MathOp2+CompOp2) then
+        else if Func1 in (MathOp2+CompOp2) then
         begin
-          if Func[1]=';' then
+          if Func1=';' then
           begin
             //尽量获取后面那个表达式的值，如果只有一个表达式，那就获取第一个表达式的值
             //eg:  X:=10; Y:=3; X*Y-9   => 21
@@ -1052,7 +1063,7 @@ begin
           end
           else
         {$ENDIF}
-            case Func[1] of
+            case Func1 of
               '+': Result:=v1+v2;  //String? Number?
               '-': Result:=v1-v2;
               '*': Result:=v1*v2;
@@ -1068,15 +1079,15 @@ begin
               else Done:=false;
             end;
         end
-        else if Func[1]='!' then
+        else if Func1='!' then
         begin
           Result:=not Boolean(GetP1);
         end
-        else if Func[1]='~' then
+        else if Func1='~' then
         begin
           Result:=not Integer(GetP1);
         end
-        else if Func[1]='(' then  //Collection
+        else if Func1='(' then  //Collection
         begin
           Result:=Func_Collection;
         end
@@ -1085,7 +1096,7 @@ begin
       end;
       2:
       begin
-        if Func[1] in CompOp2 then
+        if Func1 in CompOp2 then
         begin
           v1:=GetP1;
         {$IFNDEF NO_COLLECTION}
@@ -1108,7 +1119,7 @@ begin
             Done:=false;
         end
         else begin
-          case Func[1] of
+          case Func1 of
           {$IFNDEF NO_ASSIGNMENT}
             ':':
             begin
@@ -1164,7 +1175,7 @@ begin
       end;
       3:
       begin
-        case Func[1] of
+        case Func1 of
           'A':
             if Func='AND' then
               Result:=Boolean(GetP1) and Boolean(GetP2)
@@ -1175,9 +1186,29 @@ begin
               SetValue(GetP1-1)
             else
               Done:=false;
+          'F':
+            if Func='FOR' then
+            begin
+              n:=0;
+              try
+                GetP1;  //Init
+                while VarEqual(GetP3,true) do  //Check
+                begin
+                  Inc(n);
+                  GetPN(4); //Body
+                  GetP2;    // Inc(i)
+                end;
+              except
+              end;
+              Result:=n;
+            end
+            else
+              Done:=false;
           'I':
             if Func='INC' then
               SetValue(GetP1+1)
+            else if Func='INT' then  //2010-08-11
+              Result:=Integer(GetP1)
             else
               Done:=false;
           'L':
@@ -1207,7 +1238,11 @@ begin
               else if VarIsEmpty(Result) then
                 Result:=Null
               else
-                Result:=Boolean(Result);
+                Result:=not Boolean(Result);
+            end
+            else if Func='NOW' then
+            begin
+              Result:=Now;
             end
             else
               Done:=false;
@@ -1220,13 +1255,51 @@ begin
             Done:=false;
         end;
       end;
+      4:
+      begin
+        case Func1 of
+          'B':
+            if Func='BOOL' then
+            begin
+              Result:=Boolean(GetP1);
+            end
+            else
+              Done:=false;
+          else
+            Done:=false;
+        end;
+      end;
       5:
       begin
-        case Func[1] of
+        case Func1 of
           'B':
             if Func='BREAK' then
             begin
               Abort;  //产生哑异常，跳出循环结构
+            end
+            else
+              Done:=false;
+          'F':
+            if Func='FLOAT' then
+            begin
+              Result:=Double(GetP1);
+            end
+            else
+              Done:=false;
+          'T':
+            if Func='TIMES' then
+            begin
+              n:=GetP1;
+              c:=0;
+              try
+                for i:=n downto 0 do
+                begin
+                  Inc(c);
+                  GetP2;
+                end;
+              except
+              end;
+              Result:=c;
             end
             else
               Done:=false;
@@ -1235,7 +1308,7 @@ begin
             begin
               n:=0;
               try
-                while Boolean(GetP1) do
+                while VarEqual(GetP1,true) do
                 begin
                   Inc(n);
                   GetP2;
@@ -1246,8 +1319,79 @@ begin
             end
             else
               Done:=false;
+          else
+            Done:=false;
         end;
-      end
+      end;
+      6:
+      begin
+        case Func1 of
+          'I':
+            if Func='ISNULL' then
+            begin
+              Result:=GetP1;
+              if VarIsNull(Result) then
+                Result:=GetP2;
+            end
+            else
+              Done:=false;
+          'R':
+            if Func='REPEAT' then
+            begin
+              n:=0;
+              try
+                repeat
+                  Inc(n);
+                  GetP1;
+                until VarEqual(GetP2,true);
+              except
+              end;
+              Result:=n;  //循环结构的返回值就是进入循环体的次数
+            end
+            else
+              Done:=false;
+          'S':
+            if Func='STRING' then
+            begin
+              Result:=String(GetP1);
+            end
+            else
+              Done:=false;
+          else
+            Done:=false;
+        end;
+      end;
+      7:
+      begin
+        case Func1 of
+          'B':
+            if Func='BETWEEN' then
+            begin
+              Result:=GetP1;
+              if VarIsNull(Result) then
+                Result:=GetP2;
+            end
+            else
+              Done:=false;
+          'R':
+            if Func='REPEAT' then
+            begin
+              n:=0;
+              try
+                repeat
+                  Inc(n);
+                  GetP1;
+                until VarEqual(GetP2,true);
+              except
+              end;
+              Result:=n;  //循环结构的返回值就是进入循环体的次数
+            end
+            else
+              Done:=false;
+          else
+            Done:=false;
+        end;
+      end;
       else
         Done:=false;
     end;
@@ -2000,16 +2144,35 @@ begin
     else if (Ch in MathOp2+CompOp2) then  //双目运算符以及比较操作符、赋值运算符
     begin
       if JLevel>=High(JObjs) then break;  //强制跳出
-      if Ch in MathOp2-[':'] then  //排除赋值的情况
+      if Ch in MathOp2-[':','/'] then  //排除赋值和注释的情况
       begin
         StrValue:=Ch;
         Inc(I);
       end
-      else
+      else if Ch<>'/' then
+      begin
         repeat
           StrValue:=StrValue + SubString[i];
           Inc(i);
         until (SubString[I] in CompOp2)=false;
+      end
+      else begin //  '/'  2010-08-10
+        while i<=e do
+        begin
+          if SubString[I]<>'/' then break;
+          StrValue:=StrValue+SubString[i];
+          Inc(i);
+        end;
+        if Length(StrValue)>=2 then  //  '//' or more...
+        begin
+          while i<=e do
+          begin
+            if SubString[I] in [#13,#10] then break;
+            Inc(i);
+          end;
+          continue;
+        end;
+      end;      
       AddOp(StrValue,amOperator,true);
       FuncName:='';
       ExprStart:=true;
