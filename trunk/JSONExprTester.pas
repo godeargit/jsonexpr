@@ -370,6 +370,25 @@ begin
       Msg:=Msg+#13#10+(mstr+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
     end;
     J.Free;
+    //Cycle test
+    mstr:='n:=0; For(i:=1, Inc(i), i<=100, n:=n+i); n';
+    J:=ExprToJSON(mstr);
+    v:=Eval(J);
+    if v<>5050 then
+    begin
+      Result:=false;
+      Msg:=Msg+#13#10+(mstr+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
+    end;
+    J.Free;
+    mstr:='n:=1; i:=2; While(i<10, n:=n*i; i:=i+2); n';
+    J:=ExprToJSON(mstr);
+    v:=Eval(J);
+    if v<>5050 then
+    begin
+      Result:=false;
+      Msg:=Msg+#13#10+(mstr+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
+    end;
+    J.Free;
     VHelper.PutNull('Y');
     mstr:='IF(Y IS not NULL, 3*0.5+Y, 5.875-(9<<2)*X)';
     J:=ExprToJSON(mstr,VHelper);
