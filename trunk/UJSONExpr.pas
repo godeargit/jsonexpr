@@ -100,6 +100,14 @@ ver 0.3.3  By creation_zy  (无尽愿)
   Add Line comment "//"
   Add function "Now"
   Add type cast function: Int, String, Bool, Float
+
+2011-09-01
+ver 0.3.4  By creation_zy  (无尽愿)
+  Realize array parse and eval.
+  Bug fix for expr like "Now()-1".
+  Allow "+" at begin of expression just as "-".
+  Add type cast function: Date, Time, Datetime
+  Add Print procedure.
 }
 
 unit UJSONExpr;
@@ -126,8 +134,12 @@ const
   BIOS_StrParamHeader='''';    //为了将字符串与变量名相区别，所有字符串值均带单引号前缀
   BIOS_VarTag='"';             //支持由"包围的变量名，如 "No.1 Var", ":-)", "He ""!""" ——变量名不能以'开头
 type
+  TParamIdxs=(pi1,pi2,pi3,pi4,pi5,pi6,pi7,pi8);
+  TParamSet=set of TParamIdxs;
   TTraceLineFunc=procedure (Sender: TObject; LineData: TZAbstractObject; const LineVal: Variant);
   TTraceValueFunc=procedure (Sender: TObject; const VarName: String; const Val: Variant);
+  TVarToStrDefFunc=function (v: Variant; const ADefault: String): String;
+  TPrintFunc=procedure (const Str: String);
   TExprType=(etEmpty, etNumber, etBool, etString, etMixed);
   TJSONVarHelper=class;
   TJSONFuncHelper=class;
@@ -144,14 +156,20 @@ type
     FVarHelper: TJSONVarHelper;
     FTraceOnLine: Boolean;
     FOnLineComplete: TTraceLineFunc;
+    FPrintFunc: TPrintFunc;
+    FVarToStrDefFunc: TVarToStrDefFunc;
     procedure SetOnLineComplete(const Value: TTraceLineFunc);
     procedure SetTraceOnLine(const Value: Boolean);
+    procedure SetPrintFunc(const Value: TPrintFunc);
+    procedure SetVarToStrDefFunc(const Value: TVarToStrDefFunc);
   public
     property VarHelper: TJSONVarHelper read FVarHelper;
     property FuncHelper: TJSONFuncHelper read FFuncHelper;
     //是否在一个语句执行完毕时触发
     property TraceOnLine:Boolean read FTraceOnLine write SetTraceOnLine;
     property OnLineComplete:TTraceLineFunc read FOnLineComplete write SetOnLineComplete;
+    property VarToStrDefFunc:TVarToStrDefFunc read FVarToStrDefFunc write SetVarToStrDefFunc;
+    property PrintFunc:TPrintFunc read FPrintFunc write SetPrintFunc;
     function Eval(AObj: TZAbstractObject):Variant;
     function EvalNumber(AObj: TZAbstractObject; out Val:Double):Boolean;
     function OptimizeJSON(AObj: JSONObject):JSONObject;
@@ -173,6 +191,7 @@ type
       ParentOpRank: Integer=-1; VarHelper: TJSONVarHelper=nil):String;
     class function VarToExprStr(V: Variant):String;
     class function VarNeeded(AObj: JSONObject; var Vars: TStrings):Integer;
+    class function Version:ShortString;
   end;
   { 变量值获取类
     可以通过传入的变量名或JSON格式的变量描述，提取变量的值。
@@ -233,9 +252,11 @@ type
   public
     property NextHelper: TJSONFuncHelper read FNextHelper write SetNextHelper;
     function GetValue(Sender: TJSONExprParser; const Func: String;
-      Params: array of Variant; out Val:Variant):Boolean; virtual;
+      var Params: array of Variant; out Val:Variant;
+      out OutParamIdx: TParamSet):Boolean; virtual;
     function GetValue2(Sender: TJSONExprParser; FuncObj: JSONObject;
-      Params: array of Variant; out Val:Variant):Boolean; virtual;
+      var Params: array of Variant; out Val:Variant;
+      out OutParamIdx: TParamSet):Boolean; virtual;
   end;
   TSimpleVarHelper=class(TJSONVarHelper)
   private
@@ -790,6 +811,7 @@ function TJSONExprParser.Eval(AObj: TZAbstractObject): Variant;
     NullVal:Boolean;
     Z:TZAbstractObject;
     v1,v2:Variant;
+    vt1,vt2:Word;
   begin
     Result:=false;
     v1:=GetP1;
@@ -807,7 +829,18 @@ function TJSONExprParser.Eval(AObj: TZAbstractObject): Variant;
             Result:=true;
         end
         else if not VarIsNull(v2) then
-          Result:=v1=v2;
+        begin
+          vt1:=VarType(v1);
+          vt2:=VarType(v2);
+          if vt1=vt2 then
+            Result:=v1=v2
+          else begin  //不同类型  2011-09-01
+            try
+              Result:=v1=v2;
+            except
+            end;
+          end;
+        end;
         if Result then break;
       end;
     end
@@ -850,13 +883,46 @@ function TJSONExprParser.Eval(AObj: TZAbstractObject): Variant;
       Result[i-1]:=v1;
     end;
   end;
-  procedure SetValue(Val: Variant);
+  function Func_ArrayItem:Variant;   // A[10,2]  =>  {op:"[",p1:"A",p2:10,p3:2}
+  var
+    i,idx:Integer;
+    //P:Pointer;
+    v1:Variant;
+  begin
+    Result:=GetP1;
+    for i:=2 to Pred(JSONObject(AObj).Length) do
+    begin
+      if not VarIsArray(Result) then
+      begin
+        if VarType(Result)=vtString then
+        begin
+          try
+            Result:=String(Result)[Integer(GetPN(i))];
+          except
+            Result:=Null
+          end;
+        end
+        else
+          Result:=Null;
+        exit;
+      end;
+      try
+        v1:=Eval(JSONObject(AObj).Opt(BIOS_ParamHeader+IntToStr(i)));
+        idx:=v1;
+        if (idx>=0) and (idx<=VarArrayHighBound(Result,1)) then
+          Result:=Result[idx];
+      except
+        Result:=Null;
+      end;
+    end;
+  end;
+  procedure SetValue(Val: Variant; const PName: String=BIOS_Param1);
   var
     Z,Z2:TZAbstractObject;
     mstr:String;
   begin
     Result:=Val;  //将右侧表达式的值做为整个赋值过程的值
-    Z:=JSONObject(AObj).Opt(BIOS_Param1);
+    Z:=JSONObject(AObj).Opt(PName);
     begin
       if Z.ClassType=_String then
       begin
@@ -899,10 +965,13 @@ function TJSONExprParser.Eval(AObj: TZAbstractObject): Variant;
 var
   Func,mstr:String;
   Func1:AnsiChar;
-  v1,v2:Variant;
+  v1,v2,v3:Variant;
+  VParams:TVarAy;
+  OutSet:TParamSet;
   Done:Boolean;
   Z,Z2:TZAbstractObject;
   ParamCnt,i,n,c:Integer;
+  w1,w2,w3,w4,w5,w6:Word;
 begin
   Result:=Null;
   if AObj=nil then exit;
@@ -936,10 +1005,43 @@ begin
     if FuncHelper<>nil then
     begin
       case JSONObject(AObj).Length of
-        2: FuncHelper.GetValue2(Self,JSONObject(Z),[GetP1],Result);
-        3: FuncHelper.GetValue2(Self,JSONObject(Z),[GetP1,GetP2],Result);
+        2:
+        begin
+          SetLength(VParams,1);
+          VParams[0]:=GetP1;  //[GetP1];
+          FuncHelper.GetValue2(Self,JSONObject(Z),VParams,Result,OutSet);
+          if OutSet<>[] then  //Write back Out Param   2010-08-12
+            SetValue(VParams[0]);
+          SetLength(VParams,0);
+        end;
+        3:
+        begin
+          SetLength(VParams,2);
+          VParams[0]:=GetP1;  //[GetP1,GetP2];
+          VParams[1]:=GetP2;
+          FuncHelper.GetValue2(Self,JSONObject(Z),VParams,Result,OutSet);
+          if OutSet<>[] then
+          begin
+            if pi1 in OutSet then
+              SetValue(VParams[0],BIOS_Param1);
+            if pi2 in OutSet then
+              SetValue(VParams[1],BIOS_Param2);
+          end;
+          SetLength(VParams,0);
+        end;
         else
-          FuncHelper.GetValue2(Self,JSONObject(Z),GetParams(JSONObject(AObj)),Result);
+        begin
+          VParams:=GetParams(JSONObject(AObj));
+          FuncHelper.GetValue2(Self,JSONObject(Z),VParams,Result,OutSet);
+          if OutSet<>[] then
+          begin
+            for i:=Integer(Low(TParamIdxs)) to Integer(High(TParamIdxs)) do
+            begin
+              if TParamIdxs(i) in OutSet then
+                SetValue(VParams[i],BIOS_ParamHeader+IntToStr(i));
+            end;
+          end;
+        end;
       end;
     end;
     exit;
@@ -1090,6 +1192,10 @@ begin
         else if Func1='(' then  //Collection
         begin
           Result:=Func_Collection;
+        end
+        else if Func1='[' then  //Array Element  2011-09-01
+        begin
+          Result:=Func_ArrayItem;
         end
         else
           Done:=false;
@@ -1243,6 +1349,41 @@ begin
             else if Func='NOW' then
             begin
               Result:=Now;
+              v1:=GetP1;  //通过参数实现时间取整  2011-06-23
+              if not VarIsNull(v1) then
+              begin
+                mstr:=v1;
+                if mstr<>'' then
+                  case mstr[1] of
+                    'D','d':
+                    begin
+                      DecodeDate(Result,w1,w2,w3);
+                      Result:=EncodeDate(w1,w2,w3);
+                    end;
+                    'M':
+                    begin
+                      DecodeDate(Result,w1,w2,w3);
+                      Result:=EncodeDate(w1,w2,1);
+                    end;
+                    'Y':
+                    begin
+                      DecodeDate(Result,w1,w2,w3);
+                      Result:=EncodeDate(w1,1,1);
+                    end;
+                    'H','h':
+                    begin
+                      DecodeDate(Result,w1,w2,w3);
+                      DecodeTime(Result,w4,w5,w5,w5);
+                      Result:=EncodeDate(w1,w2,w3)+EncodeTime(w4,0,0,0);
+                    end;
+                    'm':
+                    begin
+                      DecodeDate(Result,w1,w2,w3);
+                      DecodeTime(Result,w4,w5,w6,w6);
+                      Result:=EncodeDate(w1,w2,w3)+EncodeTime(w4,w5,0,0);
+                    end;
+                  end;
+              end;
             end
             else
               Done:=false;
@@ -1265,6 +1406,20 @@ begin
             end
             else
               Done:=false;
+          'D':
+            if Func='DATE' then  //2011-09-01
+            begin
+              Result:=StrToDate(GetP1);
+            end
+            else
+              Done:=false;
+          'T':
+            if Func='TIME' then  //2011-09-01
+            begin
+              Result:=StrToTime(GetP1);
+            end
+            else
+              Done:=false;
           else
             Done:=false;
         end;
@@ -1283,6 +1438,20 @@ begin
             if Func='FLOAT' then
             begin
               Result:=Double(GetP1);
+            end
+            else
+              Done:=false;
+          'P':
+            if Func='PRINT' then
+            begin
+              if Assigned(VarToStrDefFunc) then
+                Result:=VarToStrDefFunc(GetP1,'')
+              else
+                Result:=VarToStrDef(GetP1,'');
+              if Assigned(PrintFunc) then
+              begin
+                PrintFunc(Result);
+              end;
             end
             else
               Done:=false;
@@ -1367,24 +1536,28 @@ begin
           'B':
             if Func='BETWEEN' then
             begin
-              Result:=GetP1;
-              if VarIsNull(Result) then
-                Result:=GetP2;
+              Result:=false;
+              if ParamCnt>=3 then  //2011-09-01
+              begin
+                v1:=GetP1;
+                v2:=GetP2;
+                v3:=GetP3;
+                Result:=(v1>=v2) and (v1<=v3);
+              end;
             end
             else
               Done:=false;
-          'R':
-            if Func='REPEAT' then
+          else
+            Done:=false;
+        end;
+      end;
+      8:
+      begin
+        case Func1 of
+          'D':
+            if Func='DATETIME' then  //2011-09-01
             begin
-              n:=0;
-              try
-                repeat
-                  Inc(n);
-                  GetP1;
-                until VarEqual(GetP2,true);
-              except
-              end;
-              Result:=n;  //循环结构的返回值就是进入循环体的次数
+              Result:=StrToDateTime(GetP1);
             end
             else
               Done:=false;
@@ -1398,10 +1571,43 @@ begin
     if Done then exit;
     if FuncHelper<>nil then
       case JSONObject(AObj).Length of
-        2: FuncHelper.GetValue(Self,Func,[GetP1],Result);
-        3: FuncHelper.GetValue(Self,Func,[GetP1,GetP2],Result);
-        else
-          FuncHelper.GetValue(Self,Func,GetParams(JSONObject(AObj)),Result);
+        2: //FuncHelper.GetValue(Self,Func,[GetP1],Result,OutSet);
+        begin
+          SetLength(VParams,1);
+          VParams[0]:=GetP1;  //[GetP1];
+          FuncHelper.GetValue(Self,Func,VParams,Result,OutSet);
+          if OutSet<>[] then  //Write back Out Param   2010-08-12
+            SetValue(VParams[0]);
+          SetLength(VParams,0);
+        end;
+        3: //FuncHelper.GetValue(Self,Func,[GetP1,GetP2],Result,OutSet);
+        begin
+          SetLength(VParams,2);
+          VParams[0]:=GetP1;  //[GetP1,GetP2];
+          VParams[1]:=GetP2;
+          FuncHelper.GetValue(Self,Func,VParams,Result,OutSet);
+          if OutSet<>[] then
+          begin
+            if pi1 in OutSet then
+              SetValue(VParams[0],BIOS_Param1);
+            if pi2 in OutSet then
+              SetValue(VParams[1],BIOS_Param2);
+          end;
+          SetLength(VParams,0);
+        end;
+        else //FuncHelper.GetValue(Self,Func,GetParams(JSONObject(AObj)),Result,OutSet);
+        begin
+          VParams:=GetParams(JSONObject(AObj));
+          FuncHelper.GetValue(Self,Func,VParams,Result,OutSet);
+          if OutSet<>[] then
+          begin
+            for i:=Integer(Low(TParamIdxs)) to Integer(High(TParamIdxs)) do
+            begin
+              if TParamIdxs(i) in OutSet then
+                SetValue(VParams[i],BIOS_ParamHeader+IntToStr(i+1));
+            end;
+          end;
+        end;
       end;
   except
     Result:=Null;
@@ -1461,6 +1667,8 @@ var
   Func,mstr:String;
   v:Variant;
   va:TVarAy;
+  VParams:TVarAy;
+  OutSet:TParamSet;
   v1,v2:Double;
   Done:Boolean;
   Z:TZAbstractObject;
@@ -1603,7 +1811,12 @@ begin
       begin
         v1:=GetP1(Result);
         if Result then
-          Result:=FuncHelper.GetValue(Self,Func,[v1],v);
+        begin
+          SetLength(VParams,1);
+          VParams[0]:=v1;
+          Result:=FuncHelper.GetValue(Self,Func,VParams,v,OutSet);
+          SetLength(VParams,0);
+        end;
       end;
       3:
       begin
@@ -1611,13 +1824,17 @@ begin
         if Result then
         begin
           v2:=GetP2(Result);
-          Result:=FuncHelper.GetValue(Self,Func,[v1,v2],v);
+          SetLength(VParams,2);
+          VParams[0]:=v1;
+          VParams[1]:=v2;
+          Result:=FuncHelper.GetValue(Self,Func,VParams,v,OutSet);
+          SetLength(VParams,0);
         end;
       end;
       else begin
         va:=GetParams(JSONObject(AObj),Result);
         if Result then
-          Result:=FuncHelper.GetValue(Self,Func,va,v);
+          Result:=FuncHelper.GetValue(Self,Func,va,v,OutSet);
       end;
     end;
     if Result then
@@ -1628,7 +1845,7 @@ end;
 class function TJSONExprParser.ExprToJSON(const Expr: String;
   VarHelper: TJSONVarHelper; PStart, PEnd, POutExprLen: PInteger): JSONObject;
 type
-  TAddMode=(amNone, amBlock, amFunc, amOperator);
+  TAddMode=(amNone, amBlock, amFunc, amOperator, amBlockOp);
 var
   SubString: String;
   //Use this function to check whether the name is a var or a function.
@@ -1665,7 +1882,7 @@ var
         Inc(Result);
         break;
       end;
-      if (LevelBC[Result]<BlockCnt) and not (LevelOpCh[Result] in [OpCh_Func,'(']) then
+      if (LevelBC[Result]<BlockCnt) and not (LevelOpCh[Result] in [OpCh_Func,'(','[']) then
       begin
         Inc(Result);
         exit;
@@ -1884,7 +2101,7 @@ var
         if LevelOpCh[n]=OpCh_None then
         begin
           JP.Put(BIOS_Operator,Func);
-          if AddMode=amOperator then
+          if (AddMode=amOperator) or (AddMode=amBlockOp) then  //2011-09-01
             LevelOpCh[n]:=Func[1]
           else if AddMode=amFunc then
             LevelOpCh[n]:=OpCh_Func;
@@ -1937,7 +2154,10 @@ var
     end
     else if UsePiror then
     begin
-      JLevel:=InBlockLevel(OpRank[Func[1]]);
+      if Func[1]<>'[' then
+        JLevel:=InBlockLevel(OpRank[Func[1]])
+      else
+        JLevel:=ExprLevel;  //2011-09-01  A[1][2]
     end;
   CommonCase:
     J:=JSONObject(JObjs[JLevel]);
@@ -2005,7 +2225,7 @@ var
         JObjs[JLevel]:=JN;
         if Func='' then
           LevelOpCh[JLevel]:=OpCh_None
-        else if AddMode=amOperator then
+        else if AddMode in [amOperator,amBlockOp] then
           LevelOpCh[JLevel]:=Func[1]
         else
           LevelOpCh[JLevel]:=OpCh_Func;
@@ -2018,7 +2238,7 @@ var
       Inc(JLevel);
       if Func='' then
         LevelOpCh[JLevel]:=OpCh_None
-      else if AddMode in [amOperator,amBlock] then
+      else if AddMode in [amOperator,amBlock,amBlockOp] then
         LevelOpCh[JLevel]:=Func[1]
       else
         LevelOpCh[JLevel]:=OpCh_Func;
@@ -2071,7 +2291,7 @@ begin
       continue;
     end;
     StrValue:='';
-    if (ExprStart and (Ch='-')) or (Ch in Digits) then
+    if (ExprStart and (Ch in ['+','-'])) or (Ch in Digits) then  //2011-09-01  Can start with + or -
     begin
       repeat
         StrValue:=StrValue + SubString[i];
@@ -2216,8 +2436,8 @@ begin
               end
               else if StrValue='[' then  //Array  ... ? [ a, b]  or  ... A[1,2]
               begin
-                Inc(JLevel);
-                Dec(LevelBC[JLevel]);
+                //Inc(JLevel);
+                //Dec(LevelBC[JLevel]);
               end
               else if not (StrValue[1] in VarBegin+['(']) or (StrValue='IN') then
               begin
@@ -2253,11 +2473,13 @@ begin
           Dec(BlockCnt);
           Inc(I);
           FuncName:='';
+          ExprStart:=false;  //2011-09-01   Bug fix for something like:  Now()-1
         end;
         '[':  //数组下标
         begin
           Inc(BlockCnt);
-          AddOp(Ch,amBlock);
+          //AddOp(Ch,amBlock);
+          AddOp(Ch,amBlockOp{amOperator},true);
           LevelBC[JLevel]:=BlockCnt-1;
           Inc(I);
           FuncName:='';
@@ -2275,6 +2497,7 @@ begin
           Dec(BlockCnt);
           Inc(I);
           FuncName:='';
+          ExprStart:=false;
         end;
         '!','~':
         begin
@@ -2303,6 +2526,7 @@ begin
             end;
           end;
           WriteStr(StrValue);
+          ExprStart:=false;  //2011-09-01   Bug fix for something like:  Now()-1
         end;
         '"':  //2010-04-02
         begin
@@ -2632,9 +2856,19 @@ begin
   FOnLineComplete := Value;
 end;
 
+procedure TJSONExprParser.SetPrintFunc(const Value: TPrintFunc);
+begin
+  FPrintFunc := Value;
+end;
+
 procedure TJSONExprParser.SetTraceOnLine(const Value: Boolean);
 begin
   FTraceOnLine := Value;
+end;
+
+procedure TJSONExprParser.SetVarToStrDefFunc(const Value: TVarToStrDefFunc);
+begin
+  FVarToStrDefFunc := Value;
 end;
 
 class function TJSONExprParser.VarNeeded(AObj: JSONObject; var Vars: TStrings):Integer;
@@ -2684,6 +2918,11 @@ begin
   end
   else
     Result:=VarToStr(V);
+end;
+
+class function TJSONExprParser.Version: ShortString;
+begin
+  Result:='0.3.4';
 end;
 
 { TJSONVarHelper }
@@ -2891,13 +3130,13 @@ end;
 { TJSONFuncHelper }
 
 function TJSONFuncHelper.GetValue(Sender: TJSONExprParser; const Func: String;
-  Params: array of Variant; out Val: Variant): Boolean;
+  var Params: array of Variant; out Val: Variant; out OutParamIdx: TParamSet): Boolean;
 begin
   Result:=false;
 end;
 
 function TJSONFuncHelper.GetValue2(Sender: TJSONExprParser; FuncObj: JSONObject;
-  Params: array of Variant; out Val: Variant): Boolean;
+  var Params: array of Variant; out Val: Variant; out OutParamIdx: TParamSet): Boolean;
 begin
   Result:=false;
 end;

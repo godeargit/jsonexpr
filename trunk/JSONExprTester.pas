@@ -383,7 +383,7 @@ begin
     mstr:='n:=1; i:=2; While(i<10, n:=n*i; i:=i+2); n';
     J:=ExprToJSON(mstr);
     v:=Eval(J);
-    if v<>5050 then
+    if v<>384 then
     begin
       Result:=false;
       Msg:=Msg+#13#10+(mstr+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
@@ -403,6 +403,65 @@ begin
     J:=ExprToJSON(mstr);  //此处不应当用变量代换
     v:=Eval(J);
     if v<>15.5 then
+    begin
+      Result:=false;
+      Msg:=Msg+#13#10+(mstr+#13#10+JSONToExpr(J)+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
+    end;
+    J.Free;
+    //无参数函数跟加减表达式解析测试
+    mstr:='(Now()+1)-(Now()-1)';
+    J:=ExprToJSON(mstr);
+    v:=Eval(J);
+    if v<>2 then
+    begin
+      Result:=false;
+      Msg:=Msg+#13#10+(mstr+#13#10+JSONToExpr(J)+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
+    end;
+    J.Free;
+    // 以 + 开头的表达式
+    mstr:='+1.25';
+    J:=ExprToJSON(mstr);
+    v:=Eval(J);
+    if v<>1.25 then
+    begin
+      Result:=false;
+      Msg:=Msg+#13#10+(mstr+#13#10+JSONToExpr(J)+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
+    end;
+    J.Free;
+    // BETWEEN 表达式
+    mstr:='BETWEEN(''B'',''A1'',''X'') AND BETWEEN(100,100,1e+3)';
+    J:=ExprToJSON(mstr);
+    v:=Eval(J);
+    if v<>true then
+    begin
+      Result:=false;
+      Msg:=Msg+#13#10+(mstr+#13#10+JSONToExpr(J)+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
+    end;
+    J.Free;
+    // in 不同类型表达式
+    mstr:='12 in (''B''+''A'', false, Z, 18-6.0)';
+    J:=ExprToJSON(mstr);
+    v:=Eval(J);
+    if v<>true then
+    begin
+      Result:=false;
+      Msg:=Msg+#13#10+(mstr+#13#10+JSONToExpr(J)+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
+    end;
+    J.Free;
+    //访问数组元素
+    mstr:='A:=(1,2,4,8); B:=A[2];';
+    J:=ExprToJSON(mstr);
+    v:=Eval(J);
+    if v<>4 then
+    begin
+      Result:=false;
+      Msg:=Msg+#13#10+(mstr+#13#10+JSONToExpr(J)+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
+    end;
+    J.Free;
+    mstr:='A:=((1,10),2,4,8); B:=A[3-2-1,1];';
+    J:=ExprToJSON(mstr);
+    v:=Eval(J);
+    if v<>10 then
     begin
       Result:=false;
       Msg:=Msg+#13#10+(mstr+#13#10+JSONToExpr(J)+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));

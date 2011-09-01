@@ -8,7 +8,8 @@ uses
 type
   TStrFuncHelper=class(TJSONFuncHelper)
     function GetValue(Sender: TJSONExprParser; const Func: String;
-      Params: array of Variant; out Val:Variant):Boolean; override;
+      var Params: array of Variant; out Val:Variant;
+      out OutParamIdx: TParamSet):Boolean; override;
   end;
 
 implementation
@@ -36,17 +37,18 @@ end;
 { TStrFuncHelper }
 
 function TStrFuncHelper.GetValue(Sender: TJSONExprParser; const Func: String;
-  Params: array of Variant; out Val: Variant): Boolean;
+  var Params: array of Variant; out Val: Variant; out OutParamIdx: TParamSet): Boolean;
 var
   Func1,Func2,FuncTail:AnsiChar;
   mstr:String;
+  n:Integer;
 begin
   Result:=false;
   Val:=Null;
   if Length(Func)<3 then  //×î¶ÌÖ¸Áî
   begin
     if NextHelper<>nil then
-      Result:=NextHelper.GetValue(Sender,Func,Params,Val);
+      Result:=NextHelper.GetValue(Sender,Func,Params,Val,OutParamIdx);
     exit;
   end;
   Func1:=Func[1];
@@ -102,7 +104,8 @@ begin
         begin
           mstr:=Params[0];
           Delete(mstr,Integer(Params[1]),Integer(Params[2]));
-          Val:=mstr;
+          Params[0]:=mstr;
+          OutParamIdx:=[pi1];
         end;
         Result:=true;
       end;
@@ -153,6 +156,14 @@ begin
         if High(Params)>=0 then
           Val:=LowerCase(Params[0]);
         Result:=true;
+      end
+      else if Func='LEFT' then  //2011-07-04
+      begin
+        if High(Params)>=1 then
+          Val:=Copy(Params[0],1,Integer(Params[1]))
+        else if High(Params)>=0 then
+          Val:=Copy(Params[0],1,1);
+        Result:=true;
       end;
     end;
     'P':
@@ -178,7 +189,24 @@ begin
       if Func='REPLACE' then
       begin
         if High(Params)>=2 then
-          Val:=StringReplace(Params[0],Params[1],Params[2],[rfReplaceAll]);
+          Val:=StringReplace(Params[0],Params[1],Params[2],[rfReplaceAll])
+        else if High(Params)>=1 then  //2011-07-04
+          Val:=StringReplace(Params[0],Params[1],'',[rfReplaceAll]);
+        Result:=true;
+      end
+      else if Func='RIGHT' then  //2011-07-04
+      begin
+        if High(Params)>=0 then
+        begin
+          mstr:=Params[0];
+          if High(Params)>=1 then
+            n:=Integer(Params[1])
+          else
+            n:=1;
+          if n>Length(mstr) then
+            n:=Length(mstr);
+          Val:=Copy(mstr,Length(mstr)-n+1,n);
+        end;
         Result:=true;
       end;
     end;
@@ -267,7 +295,7 @@ begin
     end;
   end;
   if not Result and (NextHelper<>nil) then
-    Result:=NextHelper.GetValue(Sender,Func,Params,Val);  
+    Result:=NextHelper.GetValue(Sender,Func,Params,Val,OutParamIdx);  
 end;
 
 end.
