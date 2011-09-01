@@ -55,6 +55,7 @@ Type
   _String = class;
   _Double = class;
   _NULL = class ;
+  _Object = class; //2011-08-09
 
 
   ParseException = class (Exception)
@@ -103,6 +104,7 @@ Type
     constructor Create (x : JSONTokener); overload;
     constructor Create (map : TStringList); overload;
     constructor Create (const s : string); overload;
+    constructor CreateInArray(Ay: JSONArray);
 
     procedure Clean;
     function Clone : TZAbstractObject; override;
@@ -165,6 +167,7 @@ Type
     function OptInt2(key, key2 : String; DefaultValue: Integer=0): Integer;
     function GetCascadeValue(const Keys: array of String): String;
     procedure SetCascadeValue(const Value: String; const Keys: array of String);
+    function GetCascadeValEx(const Keys: array of String): String;
     function GetCascadeValObj(const Keys: array of String): TZAbstractObject;
     //procedure MigrateFrom(Source: JSONObject; IgnoreEqual: Boolean=true);
     function GetDiffFrom(Source: JSONObject; UseSrc: Boolean=true):JSONObject;
@@ -177,6 +180,11 @@ Type
     function ExtractAll:JSONObject;
     function TryNewJSONArray(const Key: String):JSONArray;
     function TryNewJSONObject(const Key: String):JSONObject;
+    //Add by creation_zy  2011-08-09
+    function GetObject (const key : string): TObject;
+    function OptObject (const key : string): TObject; overload;
+    function OptObject (const key : string; defaultValue: TObject): TObject; overload;
+    function Put (const key : string; value : TObject): JSONObject; overload;
 
 
     destructor Destroy;override;
@@ -302,6 +310,19 @@ Type
     function Equals(const Value: TZAbstractObject): Boolean; override;
     function toString() : string; override;
     function Clone :TZAbstractObject; override;  //By creation_zy  2009-12-11
+  end;
+
+  _Object = class (TZAbstractObject)
+    function Equals(const Value: TZAbstractObject): Boolean; override;
+    function toString() : string; override;
+    function Clone :TZAbstractObject; override;
+  private
+    fvalue: TObject;
+    FAsObject: TObject;
+    procedure SetAsObject(const Value: TObject);
+    constructor Create(value: TObject);
+  public
+    property AsObject: TObject read FAsObject write SetAsObject;
   end;
 
 function IsConstJSON(Z: TObject):Boolean;
@@ -1033,6 +1054,13 @@ begin
 end;
 
 
+constructor JSONObject.CreateInArray(Ay: JSONArray);
+begin
+  create;
+  if Ay<>nil then
+    Ay.put(Self);
+end;
+
 (**
      * Accumulate values under a key. It is similar to the put method except
      * that if there is already an object stored under the key then a
@@ -1518,14 +1546,36 @@ end;
      *)
 function JSONObject.optJSONObject(const key: string): JSONObject;
 var
- o : TZAbstractObject ;
+  o : TZAbstractObject ;
 begin
   o := opt(key);
-  if (o is JSONObject) then begin
-      Result := JSONObject(o);
-    end else begin
-      Result := nil;
-    end;
+  if (o is JSONObject) then
+    Result := JSONObject(o)
+  else
+    Result := nil;
+end;
+
+function JSONObject.OptObject(const key: string;
+  defaultValue: TObject): TObject;
+var
+  o : TZAbstractObject ;
+begin
+  o := opt(key);
+  if (o is _Object) then
+    Result := _Object(o).AsObject
+  else
+    Result := defaultValue;
+end;
+
+function JSONObject.OptObject(const key: string): TObject;
+var
+  o : TZAbstractObject ;
+begin
+  o := opt(key);
+  if (o is _Object) then
+    Result := _Object(o).AsObject
+  else
+    Result := nil;
 end;
 
 (**
@@ -1655,9 +1705,16 @@ end;
 
 function JSONObject.put(const key, value: string): JSONObject;
 begin
-   put(key, _String.create(value));
-   Result := self;
+  put(key, _String.create(value));
+  Result := self;
 end;
+
+function JSONObject.Put(const key: string; value: TObject): JSONObject;
+begin
+  put(key, _Object.create(value));
+  Result := self;
+end;
+
 (**
      * Put a key/value pair in the JSONObject, but only if the
      * value is non-null.
@@ -2074,6 +2131,30 @@ begin
   end;
 end;
 
+function JSONObject.GetCascadeValEx(const Keys: array of String): String;
+var
+  i:Integer;
+  TmpProp,p:JSONObject;
+begin
+  Result:='';
+  TmpProp:=Self;
+  for i:=Low(Keys) to High(Keys) do
+  begin
+    if i=High(Keys) then
+    begin
+      Result:=TmpProp.PropValues[Keys[i]];
+      exit;
+    end;
+    p:=TmpProp.OptJSONObject(Keys[i]);
+    if p=nil then
+    begin
+      Result:=TmpProp.OptString(Keys[i]);
+      exit;
+    end;
+    TmpProp:=p;
+  end;
+end;
+
 function JSONObject.GetCascadeValObj(
   const Keys: array of String): TZAbstractObject;
 var
@@ -2274,6 +2355,11 @@ end;
 function JSONObject.GetKeyByIndex(index: Integer): String;
 begin
   Result:=myHashMap[index];
+end;
+
+function JSONObject.GetObject(const key: string): TObject;
+begin
+
 end;
 
 procedure JSONObject.SetCascadeValue(const Value: String;
@@ -3520,6 +3606,36 @@ end;
 function TZAbstractObject.ToString: string;
 begin
   Result := Format('%s <%p>', [ClassName, addr(Self)]);
+end;
+
+{ _Object }
+
+function _Object.Clone: TZAbstractObject;
+begin
+  Result:=_Object.Create(fvalue);
+end;
+
+constructor _Object.Create(value: TObject);
+begin
+  fvalue:=value;
+end;
+
+function _Object.Equals(const Value: TZAbstractObject): Boolean;
+begin
+  Result:=(Value is _Object) and (_Object(Value).AsObject=AsObject);
+end;
+
+procedure _Object.SetAsObject(const Value: TObject);
+begin
+  FAsObject := Value;
+end;
+
+function _Object.toString: string;
+begin
+  if fvalue=nil then
+    Result:=''
+  else
+    Result:=fvalue.ClassName+'::'+IntToHex(Integer(fvalue),8);
 end;
 
 initialization
