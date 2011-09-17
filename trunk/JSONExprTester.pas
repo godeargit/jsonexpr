@@ -60,8 +60,9 @@ begin
   Msg:='';
   Result:=true;
   VHelper:=TSimpleVarHelper.Create;
-  with TJSONExprParser do
+  with TJSONExprParser.Create do
   begin
+    AddVarHelper(VHelper);
     //Expr Parse Test
     mstr:='';
     with ExprToJSON(mstr) do
@@ -246,7 +247,8 @@ begin
     VHelper.Put('Z',3.5);
     VHelper.PutNull('Y');
     mstr:='(X>Y) or (Z>(X+Y)) or not (Z<-1)';
-    with ExprToJSON(mstr,VHelper) do
+    UseVarHelperOnParse:=true;
+    with ExprToJSON(mstr{,VHelper}) do
     begin
       if toString<>'{op:"OR",p1:{op:"OR",p1:{op:">",p1:"X",p2:null},p2:{op:">",p1:3.5,p2:{op:"+",p1:"X",p2:null}}},p2:{op:"NOT",p1:{op:"<",p1:3.5,p2:-1}}}' then
       begin
@@ -255,6 +257,7 @@ begin
       end;
       Free;
     end;
+    UseVarHelperOnParse:=false;
     mstr:='(100*{op:"AVG",p1:"Qty*Price"})/{op:"MAX",p1:"Income",at:"Year"}';
     with ExprToJSON(mstr) do
     begin
@@ -309,25 +312,15 @@ begin
       end;
       Free;
     end;
-    //collection and array test
-    (*mstr:='C:=(1,1+2); a:=[0,1+1]; IF((1+a[1]) in C,a[1],-a[2])';
+    mstr:='A[1][2+3*4,B[5].C(6,D)]';
     J:=ExprToJSON(mstr);
-    with J do
+    if JSONToExpr(J,0)<>mstr then
     begin
-      if toString<>'{op:"DATEPART",p1:"day",p2:{op:"GETDATE"}}' then
-      begin
-        Result:=false;
-        Msg:=Msg+#13#10+(mstr+#13#10'=>'#9+toString2(2));
-      end;
-      s1:=JSONToExpr(J);
-      if s1<>'DATEPART(day,GETDATE())' then
-      begin
-        Result:=false;
-        Msg:=Msg+#13#10+(JSONToExpr(J));
-      end;
-      Free;
+      Result:=false;
+      Msg:=Msg+#13#10+mstr+' => '+JSONToExpr(J,0);
     end;
-    *)
+    J.Free;
+    Free;
   end;
   //Eval Test
   VHelper.Clean;
@@ -353,7 +346,8 @@ begin
     end;
     J.Free;
     mstr:='X+2 in (null,2<>3,2+3*1)';
-    J:=ExprToJSON(mstr,VHelper);
+    UseVarHelperOnParse:=true;
+    J:=ExprToJSON(mstr{,VHelper});
     v:=Eval(J);
     if not v then
     begin
@@ -362,7 +356,7 @@ begin
     end;
     J.Free;
     mstr:='(X=3) in (null,2<>3,2+3*1)';
-    J:=ExprToJSON(mstr,VHelper);
+    J:=ExprToJSON(mstr{,VHelper});
     v:=Eval(J);
     if not v then
     begin
@@ -370,6 +364,7 @@ begin
       Msg:=Msg+#13#10+(mstr+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
     end;
     J.Free;
+    UseVarHelperOnParse:=false;
     //Cycle test
     mstr:='n:=0; For(i:=1, Inc(i), i<=100, n:=n+i); n';
     J:=ExprToJSON(mstr);
@@ -391,7 +386,8 @@ begin
     J.Free;
     VHelper.PutNull('Y');
     mstr:='IF(Y IS not NULL, 3*0.5+Y, 5.875-(9<<2)*X)';
-    J:=ExprToJSON(mstr,VHelper);
+    UseVarHelperOnParse:=true;
+    J:=ExprToJSON(mstr{,VHelper});
     v:=Eval(J);
     if v<>-102.125 then
     begin
@@ -399,6 +395,7 @@ begin
       Msg:=Msg+#13#10+(mstr+#13#10+JSONToExpr(J,0)+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
     end;
     FreeAndNil(J);
+    UseVarHelperOnParse:=false;
     mstr:='X:=X^X; Y:=(12|9)^(15%6); X:=(8+X)\5;'+mstr;
     J:=ExprToJSON(mstr);  //此处不应当用变量代换
     v:=Eval(J);
@@ -462,6 +459,36 @@ begin
     J:=ExprToJSON(mstr);
     v:=Eval(J);
     if v<>10 then
+    begin
+      Result:=false;
+      Msg:=Msg+#13#10+(mstr+#13#10+JSONToExpr(J)+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
+    end;
+    J.Free;
+    //collection and array test
+    mstr:='C:=(1,1+2); a:=(20,1+1); PRINT(1+a[1]); IF((1+a[1]) in C, a[0]-(C[1]*2), -a[1])';
+    J:=ExprToJSON(mstr);
+    v:=Eval(J);
+    if v<>14 then
+    begin
+      Result:=false;
+      Msg:=Msg+#13#10+(mstr+#13#10+JSONToExpr(J)+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
+    end;
+    J.Free;
+    //Eval test
+    mstr:='A:=''99'';Eval(''10''+A+''.0-100+2'');';
+    J:=ExprToJSON(mstr);
+    v:=Eval(J);
+    if v<>1001 then
+    begin
+      Result:=false;
+      Msg:=Msg+#13#10+(mstr+#13#10+JSONToExpr(J)+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
+    end;
+    J.Free;
+    //  ?= test
+    mstr:='A:=33;B:=(A/=3);B+=100';
+    J:=ExprToJSON(mstr);
+    v:=Eval(J);
+    if v<>111 then
     begin
       Result:=false;
       Msg:=Msg+#13#10+(mstr+#13#10+JSONToExpr(J)+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));

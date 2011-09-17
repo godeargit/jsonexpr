@@ -1,5 +1,5 @@
 {
-  Copyright 2009,2010  creation_zy
+  Copyright 2009,2010,2011  creation_zy
   creation_zy@sina.com
 
   This library is free software; you can redistribute it and/or
@@ -108,6 +108,9 @@ ver 0.3.4  By creation_zy  (无尽愿)
   Allow "+" at begin of expression just as "-".
   Add type cast function: Date, Time, Datetime
   Add Print procedure.
+
+2011-09-07
+ver 0.3.4  By creation_zy  (无尽愿)
 }
 
 unit UJSONExpr;
@@ -125,14 +128,19 @@ uses
 //{$DEFINE NO_TRACE}
 {$DEFINE NO_RECMEMBER}
 //{$DEFINE NO_COMPLEXOBJ}
+//{$DEFINE NO_OPTRANSLATE}
 
 const
+  varObject=varAny+$1000;
   BIOS_Operator='op';
   BIOS_ParamHeader='p';
   BIOS_Param1='p1';
   BIOS_Param2='p2';
   BIOS_StrParamHeader='''';    //为了将字符串与变量名相区别，所有字符串值均带单引号前缀
   BIOS_VarTag='"';             //支持由"包围的变量名，如 "No.1 Var", ":-)", "He ""!""" ——变量名不能以'开头
+  BIOS_BodyDefOp='::=';        //  Add(x,y)::=(x+y);
+  BIOS_Class='class';          //  TFoo:Class(TObject)::=(Name:String; ID:Int);
+  BIOS_Eval='EVAL';            //表达式求值
 type
   TParamIdxs=(pi1,pi2,pi3,pi4,pi5,pi6,pi7,pi8);
   TParamSet=set of TParamIdxs;
@@ -141,8 +149,9 @@ type
   TVarToStrDefFunc=function (v: Variant; const ADefault: String): String;
   TPrintFunc=procedure (const Str: String);
   TExprType=(etEmpty, etNumber, etBool, etString, etMixed);
-  TJSONVarHelper=class;
-  TJSONFuncHelper=class;
+  TJEVarHelper=class;
+  TJEFuncHelper=class;
+  TJEOpHelper=class;
   { Expression Parser/Evaluator/Analyser 表达式解析/计算/分析器
     可以将类似 (X+3)*Y 的文本表达式解析为JSON对象，并可以对这个JSON对象进行计算求值
     语句求值规则：
@@ -152,19 +161,30 @@ type
   }
   TJSONExprParser=class
   private
-    FFuncHelper: TJSONFuncHelper;
-    FVarHelper: TJSONVarHelper;
+    FFuncHelper: TJEFuncHelper;
+    FVarHelper: TJEVarHelper;
     FTraceOnLine: Boolean;
     FOnLineComplete: TTraceLineFunc;
     FPrintFunc: TPrintFunc;
     FVarToStrDefFunc: TVarToStrDefFunc;
+    FOpHelper: TJEOpHelper;
+    FUseVarHelperOnTextGen: Boolean;
+    FUseVarHelperOnParse: Boolean;
     procedure SetOnLineComplete(const Value: TTraceLineFunc);
     procedure SetTraceOnLine(const Value: Boolean);
     procedure SetPrintFunc(const Value: TPrintFunc);
     procedure SetVarToStrDefFunc(const Value: TVarToStrDefFunc);
+    procedure SetOpHelper(const Value: TJEOpHelper);
+    procedure SetUseVarHelperOnParse(const Value: Boolean);
+    procedure SetUseVarHelperOnTextGen(const Value: Boolean);
   public
-    property VarHelper: TJSONVarHelper read FVarHelper;
-    property FuncHelper: TJSONFuncHelper read FFuncHelper;
+    property VarHelper: TJEVarHelper read FVarHelper;
+    property FuncHelper: TJEFuncHelper read FFuncHelper;
+  {$IFNDEF NO_OPTRANSLATE}
+    property OpHelper: TJEOpHelper read FOpHelper write SetOpHelper;
+  {$ENDIF}
+    property UseVarHelperOnParse:Boolean read FUseVarHelperOnParse write SetUseVarHelperOnParse;
+    property UseVarHelperOnTextGen:Boolean read FUseVarHelperOnTextGen write SetUseVarHelperOnTextGen;
     //是否在一个语句执行完毕时触发
     property TraceOnLine:Boolean read FTraceOnLine write SetTraceOnLine;
     property OnLineComplete:TTraceLineFunc read FOnLineComplete write SetOnLineComplete;
@@ -173,22 +193,23 @@ type
     function Eval(AObj: TZAbstractObject):Variant;
     function EvalNumber(AObj: TZAbstractObject; out Val:Double):Boolean;
     function OptimizeJSON(AObj: JSONObject):JSONObject;
-    procedure AddVarHelper(AHelper: TJSONVarHelper);
-    procedure AddFuncHelper(AHelper: TJSONFuncHelper);
+    procedure AddVarHelper(AHelper: TJEVarHelper);
+    procedure AddFuncHelper(AHelper: TJEFuncHelper);
+    procedure RemoveVarHelper(AHelper: TJEVarHelper);
+    procedure RemoveFuncHelper(AHelper: TJEFuncHelper);
     //将文本表达式转换为JSON表达式树，允许代入变量的值  2+(X*Sin(Y)) => {op:"+",p1:2,p2:{op:"*",p1:"X",p2:{op:"SIN",p1:"Y"}}}
-    class function ExprToJSON(const Expr: String; VarHelper: TJSONVarHelper=nil;
-      PStart: PInteger=nil; PEnd: PInteger=nil; POutExprLen: PInteger=nil):JSONObject;
-    class function ExprToJSONStr(const Expr: String; VarHelper: TJSONVarHelper=nil):String;
+    function ExprToJSON(const Expr: String; PStart: PInteger=nil; PEnd: PInteger=nil;
+      POutExprLen: PInteger=nil):JSONObject;
+    function ExprToJSONStr(const Expr: String):String;
     class function GetLastExprType:TExprType;
     { 将JSON表达式还原为文本表达式
       如果指定了VarHelper，会将变量的值代入结果文本
       如果ParentOpRank<0，会为所有表达式加上括号
       如果ParentOpRank>0，会根据运算符优先级，返回尽量不带括号的结果
     }
-    class function JSONToExpr(AObj: JSONObject; ParentOpRank: Integer=-1;
-      VarHelper: TJSONVarHelper=nil):String;
-    class function JSONToExpr2(AObj: JSONObject; const Ident: Integer=2;
-      ParentOpRank: Integer=-1; VarHelper: TJSONVarHelper=nil):String;
+    function JSONToExpr(AObj: JSONObject; ParentOpRank: Integer=-1):String;
+    function JSONToExpr2(AObj: JSONObject; const Ident: Integer=2;
+      ParentOpRank: Integer=-1):String;
     class function VarToExprStr(V: Variant):String;
     class function VarNeeded(AObj: JSONObject; var Vars: TStrings):Integer;
     class function Version:ShortString;
@@ -197,10 +218,10 @@ type
     可以通过传入的变量名或JSON格式的变量描述，提取变量的值。
     通过设置NextHelper属性，可以形成搜索链。
   }
-  TJSONVarHelper=class
+  TJEVarHelper=class
   private
-    FNextHelper: TJSONVarHelper;
-    procedure SetNextHelper(const Value: TJSONVarHelper);
+    FNextHelper: TJEVarHelper;
+    procedure SetNextHelper(const Value: TJEVarHelper);
     function GetAsJSONString: String;
     procedure SetAsJSONString(const Value: String);
   protected
@@ -209,7 +230,7 @@ type
     function GetTraceOnSet: Boolean; virtual;
     procedure SetTraceOnSet(const Value: Boolean); virtual;
   public
-    property NextHelper: TJSONVarHelper read FNextHelper write SetNextHelper;
+    property NextHelper: TJEVarHelper read FNextHelper write SetNextHelper;
     property TraceOnSet:Boolean read GetTraceOnSet write SetTraceOnSet;
     property AsJSONString:String read GetAsJSONString write SetAsJSONString;
     //对变量名进行规范化
@@ -233,6 +254,12 @@ type
   {$ENDIF}
     function VarIsObj(const VarName: String):Boolean; virtual;
     function SetObjectVar(const VarName: String; JObj: JSONObject):Boolean; virtual;
+    function SetObjVar(const VarName: String; AObj: TObject):Boolean; virtual;
+    function GetObjAttr(AObj: TObject; const Attr: String):Variant; virtual;
+    function SetObjAttr(AObj: TObject; const Attr: String; Val:Variant):Boolean; virtual;
+    function GetObjElement(AObj: TObject; const Index: Variant):Variant; virtual;
+    function SetObjElement(AObj: TObject; const Index: Variant; Val:Variant):Boolean; virtual;
+    function CallObjFunc(AObj: TObject; const Func: String; Args: array of Variant):Variant; virtual;
     //
     property VarCount:Integer read GetVarCount;
     property VarNames[const Idx:Integer]:String read GetVarNames;
@@ -245,12 +272,12 @@ type
     可以通过传入的JSON格式的函数，提取结果值。
     通过设置NextHelper属性，可以形成搜索链。
   }
-  TJSONFuncHelper=class
+  TJEFuncHelper=class
   private
-    FNextHelper: TJSONFuncHelper;
-    procedure SetNextHelper(const Value: TJSONFuncHelper);
+    FNextHelper: TJEFuncHelper;
+    procedure SetNextHelper(const Value: TJEFuncHelper);
   public
-    property NextHelper: TJSONFuncHelper read FNextHelper write SetNextHelper;
+    property NextHelper: TJEFuncHelper read FNextHelper write SetNextHelper;
     function GetValue(Sender: TJSONExprParser; const Func: String;
       var Params: array of Variant; out Val:Variant;
       out OutParamIdx: TParamSet):Boolean; virtual;
@@ -258,7 +285,15 @@ type
       var Params: array of Variant; out Val:Variant;
       out OutParamIdx: TParamSet):Boolean; virtual;
   end;
-  TSimpleVarHelper=class(TJSONVarHelper)
+  { 符号转换类
+    用于实现与其它语言之间的符号级兼容
+  }
+  TJEOpHelper=class
+  public
+    function TranslateOperator(const Op: ShortString; JNode: TZAbstractObject):ShortString; virtual; abstract;
+    function RestoreOperator(const Op: ShortString; JNode: TZAbstractObject):ShortString; virtual; abstract;
+  end;
+  TSimpleVarHelper=class(TJEVarHelper)
   private
     FValueHolder:JSONObject;
     FTraceOnSet: Boolean;
@@ -300,7 +335,7 @@ type
   end;
   { Var Helper can directly register and access variables in memory.  直接访问本地变量
   }
-  TMemVarHelper=class(TJSONVarHelper)
+  TMemVarHelper=class(TJEVarHelper)
   private
     FVals:TStringList;
     FTypes:TStrings;
@@ -330,6 +365,8 @@ type
 function VarEqual(const v1, v2: Variant):Boolean;
 function VarToJSONObj(v: Variant):TZAbstractObject;
 function VarFromJSON(Z:TZAbstractObject):Variant;
+function Obj2Var(O: TObject): Variant; inline;
+function Var2Obj(V: Variant): TObject; inline;
 
 var
   DblQuotationAsString:Boolean=false;    //是否将双引号内的内容当成字符串
@@ -352,10 +389,25 @@ const
   VarBegin: set of Char=['a'..'z', 'A'..'Z', '_', '$', '@', #129..#254];  //允许$,@以及汉字
   VarBody: set of Char=['a'..'z', 'A'..'Z', '_', '$', '@', '0'..'9', #129..#254];
   MathOp1: set of Char=['!', '~'];  //单目运算符
-  MathOp2: set of Char=['+', '-', '*', '/', '\', '%', '^', '&', '|', '.', ':', ';'];  //双目运算符
+  MathOp2: set of Char=['+', '-', '*', '/', '\', '%', '^', '&', '|', '.', ':', ';', '?'];  //双目运算符
   CompOp2: set of Char=['=', '>', '<'];  //比较运算符
+  MathOp3: set of Char=['+', '-', '*', '/', '\', '%', '^', '&', '|'];  //双目数学运算符
+  MathOp4: set of Char=['*', '/', '\', '%', '^', '&', '|'];  //非符号双目数学运算符
   NumVarTypes: set of Byte=[varSmallint,varInteger,varSingle,varDouble,varCurrency,varByte,varWord,varLongWord];
 
+function Obj2Var(O: TObject): Variant;
+begin
+  TVarData(Result).VType := varObject;
+  TVarData(Result).vPointer := O;
+end;
+
+function Var2Obj(V: Variant): TObject;
+begin
+  if VarType(V)=varObject then
+    Result:=TObject(TVarData(V).vPointer)
+  else
+    Result:=nil;
+end;
 
 procedure InitOpRank;
 var
@@ -760,7 +812,7 @@ end;
 
 { TJSONExprParser }
 
-procedure TJSONExprParser.AddFuncHelper(AHelper: TJSONFuncHelper);
+procedure TJSONExprParser.AddFuncHelper(AHelper: TJEFuncHelper);
 begin
   if AHelper=nil then exit;
   if VarHelper<>nil then
@@ -768,7 +820,7 @@ begin
   FFuncHelper:=AHelper;
 end;
 
-procedure TJSONExprParser.AddVarHelper(AHelper: TJSONVarHelper);
+procedure TJSONExprParser.AddVarHelper(AHelper: TJEVarHelper);
 begin
   if AHelper=nil then exit;
   if VarHelper<>nil then
@@ -960,6 +1012,23 @@ function TJSONExprParser.Eval(AObj: TZAbstractObject): Variant;
         {$ENDIF}
         end;
       end;
+    end;
+  end;
+  function DoEval(const ExprStr: String):Variant;
+  var
+    JObj:JSONObject;
+  begin
+    Result:=Null;
+    if ExprStr='' then exit;
+    try
+      JObj:=ExprToJSON(ExprStr);
+      if JObj=nil then exit;
+      try
+        Result:=Eval(JObj);
+      finally
+        JObj.Free;
+      end;
+    except
     end;
   end;
 var
@@ -1202,7 +1271,25 @@ begin
       end;
       2:
       begin
-        if Func1 in CompOp2 then
+        if (Func1 in MathOp3) and (Func[2]='=') then   //2011-09-03 +=  -=  *=  ....
+        begin
+          v1:=GetP1;
+          v2:=GetP2;
+          case Func1 of
+            '+': Result:=v1+v2;
+            '-': Result:=v1-v2;
+            '*': Result:=v1*v2;
+            '/': Result:=v1/v2;
+            '\': Result:=Integer(v1) div Integer(v2);
+            '%': Result:=Integer(v1) mod Integer(v2);
+            '^': Result:=Integer(v1) xor Integer(v2);
+            '&': Result:=Integer(v1) and Integer(v2);
+            '|': Result:=Integer(v1) or Integer(v2);
+            else Done:=false;
+          end;
+          SetValue(Result);
+        end
+        else if Func1 in CompOp2 then
         begin
           v1:=GetP1;
         {$IFNDEF NO_COLLECTION}
@@ -1413,10 +1500,25 @@ begin
             end
             else
               Done:=false;
+          'E':
+            if Func=BIOS_Eval then  //2011-09-03
+            begin
+              Result:=DoEval(GetP1);
+            end
+            else
+              Done:=false;
           'T':
             if Func='TIME' then  //2011-09-01
             begin
               Result:=StrToTime(GetP1);
+            end
+            else
+              Done:=false;
+          'W':
+            if Func='WAIT' then  //2011-09-06
+            begin
+              Result:=Cardinal(GetP1);
+              Sleep(Result);
             end
             else
               Done:=false;
@@ -1665,6 +1767,7 @@ function TJSONExprParser.EvalNumber(AObj: TZAbstractObject; out Val: Double):Boo
   end;
 var
   Func,mstr:String;
+  F1:Char;
   v:Variant;
   va:TVarAy;
   VParams:TVarAy;
@@ -1708,13 +1811,14 @@ begin
     Val:=GetP1(Result);
     exit;
   end;
+  F1:=Func[1];
   Done:=true;
   case Length(Func) of
     1:
     begin
-      if Func[1] in (MathOp2+CompOp2) then
+      if F1 in (MathOp2+CompOp2) then
       begin
-        if Func[1]=';' then
+        if F1=';' then
         begin
           //同上
           n:=JSONObject(AObj).Length;
@@ -1734,8 +1838,8 @@ begin
         v1:=GetP1(Result);
         v2:=GetP2(Result);
         if not Result then exit;
-        case Func[1] of
-          '+': Val:=v1+v2;  //String? Number?
+        case F1 of
+          '+': Val:=v1+v2;
           '-': Val:=v1-v2;
           '*': Val:=v1*v2;
           '/': Val:=v1/v2;
@@ -1753,7 +1857,7 @@ begin
         end;
       end
       else begin
-        case Func[1] of
+        case F1 of
           '.':  //something like:  Plan.Max
           begin
             (*
@@ -1774,7 +1878,7 @@ begin
               Val:=Double(v);
             exit;
           end;
-          else if Func[1]='!' then
+          else if F1='!' then
           begin
             Result:=false;
             exit;
@@ -1786,7 +1890,7 @@ begin
     end;
     2:
     begin
-      if Func[1] in CompOp2 then
+      if F1 in CompOp2 then
       begin
         Result:=true;
         if Func='>>' then
@@ -1842,8 +1946,9 @@ begin
   end;
 end;
 
-class function TJSONExprParser.ExprToJSON(const Expr: String;
-  VarHelper: TJSONVarHelper; PStart, PEnd, POutExprLen: PInteger): JSONObject;
+function TJSONExprParser.ExprToJSON(const Expr: String;
+  PStart, PEnd, POutExprLen: PInteger): JSONObject;
+label DoAddOp;
 type
   TAddMode=(amNone, amBlock, amFunc, amOperator, amBlockOp);
 var
@@ -2024,7 +2129,7 @@ var
         varBoolean: WriteBool(Boolean(v));
         varString: WriteStr(String(v));
         else
-          WriteFloat(StrToFloatDef(VarToStr(v),0));
+          WriteFloat(StrToFloat(VarToStr(v)));  //2011-09-02
       end;
   end;
   function WriteVar(VarName: String):Boolean;
@@ -2041,7 +2146,7 @@ var
         Result:=false;
         exit;
       end;
-      if VarHelper<>nil then
+      if (VarHelper<>nil) and UseVarHelperOnParse then
       begin
         //尽可能将变量的值直接代入表达式
         if VarHelper.GetVar(VarName,v) then
@@ -2065,7 +2170,7 @@ var
     end;
     Result:=true;
   end;
-  procedure AddOp(const Func: String; AddMode: TAddMode=amOperator; UsePiror: Boolean=false);
+  procedure AddOp({$IFDEF NO_OPTRANSLATE}const {$ENDIF}Func: String; AddMode: TAddMode=amOperator; UsePiror: Boolean=false);
     function NewFuncObj:JSONObject;
     begin
       Result:=JSONObject.Create;
@@ -2089,7 +2194,11 @@ var
         LevelOpCh[JLevel]:=OpCh_None;
       exit;
     end;
-    //最后一个Symbol是简单值或变量的情况 -- 应当将其提升，嵌入到Func表达式内
+  {$IFNDEF NO_OPTRANSLATE}
+    if OpHelper<>nil then  //2011-09-04
+      Func:=OpHelper.TranslateOperator(Func,JObjs[JLevel]);
+  {$ENDIF}
+    //最后一个Symbol是简单值或变量的情况 -- 应n当将其提升，嵌入到Func表达式内
     if JObjs[JLevel].ClassType<>JSONObject then
     begin
       //简单变量后跟双目操作符
@@ -2244,12 +2353,32 @@ var
         LevelOpCh[JLevel]:=OpCh_Func;
     end;
   end;
+  function NextCh(CurPos, EndPos: Integer; const Str: String):Char; inline;
+  begin
+    if CurPos>=EndPos then
+      Result:=#0
+    else
+      Result:=Str[CurPos+1];
+  end;
+  function NextOps(CurPos, EndPos: Integer; const Str: String):String; inline;
+  var
+    j:Integer;
+  begin
+    Result:='';
+    j:=CurPos+1;
+    while j<=EndPos do
+    begin
+      if not (Str[j] in MathOp4+CompOp2+[':']) then exit;
+      Result:=Result+Str[j];
+      Inc(j);
+    end;
+  end;
 var
   i,s,e: Integer;
   FuncName: String;
   ExprStart: Boolean;
   StrValue: string;
-  CW:Word;
+  CW,Cnt:Word;
   Ch:Char;
   WCh:WideChar;
 begin
@@ -2319,8 +2448,12 @@ begin
         AddOp(StrValue);
         WriteFloat(0);
       end
-      else
-        WriteFloat(StrToFloatDef(StrValue,0));
+      else begin
+        try
+          WriteFloat(StrToFloat(StrValue));
+        except
+        end;
+      end;
       ExprStart:=false;
     end
     else if (Ch in VarBegin) then  //变量或函数
@@ -2364,35 +2497,51 @@ begin
     else if (Ch in MathOp2+CompOp2) then  //双目运算符以及比较操作符、赋值运算符
     begin
       if JLevel>=High(JObjs) then break;  //强制跳出
-      if Ch in MathOp2-[':','/'] then  //排除赋值和注释的情况
+      if Ch<>'/' then  //排除单行注释的情况
       begin
         StrValue:=Ch;
         Inc(I);
-      end
-      else if Ch<>'/' then
-      begin
-        repeat
-          StrValue:=StrValue + SubString[i];
-          Inc(i);
-        until (SubString[I] in CompOp2)=false;
+        while i<=e do  //2011-09-03  Allow op like:  +=  %>  -*  =<>  ::=  -:>>  |=  :<=  ...
+        begin
+          Ch:=SubString[I];
+          if not (Ch in MathOp3+CompOp2+[':','!']) then break;
+          StrValue:=StrValue+Ch;
+          Inc(I);
+        end;
+        Cnt:=Length(StrValue);
+        if (Cnt>=2) and (StrValue[Cnt] in ['+','-','!']) then  // + or - or ! at tail
+        begin
+          if StrValue[Cnt-1]<>StrValue[Cnt] then  // if not end with ++ or -- or !! , delete last char.
+          begin
+            StrValue:=Copy(StrValue,1,Cnt-1);
+            Dec(i);
+          end;
+        end;
       end
       else begin //  '/'  2010-08-10
-        while i<=e do
+        if (i<e) and (SubString[i+1] in CompOp2) then  //  Allow  /=  />  /<
         begin
-          if SubString[I]<>'/' then break;
-          StrValue:=StrValue+SubString[i];
-          Inc(i);
-        end;
-        if Length(StrValue)>=2 then  //  '//' or more...
-        begin
+          StrValue:=SubString[i]+SubString[i+1];
+          Inc(i,2);
+        end
+        else begin
           while i<=e do
           begin
-            if SubString[I] in [#13,#10] then break;
+            if SubString[I]<>'/' then break;
+            StrValue:=StrValue+'/';
             Inc(i);
           end;
-          continue;
+          if Length(StrValue)>=2 then  //  '//' or more...
+          begin
+            while i<=e do
+            begin
+              if SubString[I] in [#13,#10] then break;
+              Inc(i);
+            end;
+            continue;
+          end;
         end;
-      end;      
+      end;
       AddOp(StrValue,amOperator,true);
       FuncName:='';
       ExprStart:=true;
@@ -2411,16 +2560,6 @@ begin
           else if LevelBC[JLevel]=BlockCnt then  //... ? ( A ? B , ...
           begin  //将纯括号内部的表达式提升到括号的内部
             AddOp('(',amOperator,true);
-            {if JLevel>=High(JObjs) then break;  //强制跳出
-            JObjs[JLevel+1]:=JObjs[JLevel];
-            JObjs[JLevel]:=JSONObject.Create;
-            with JSONObject(JObjs[JLevel]) do
-            begin
-              Put(BIOS_Operator,'(');
-              Put(BIOS_Param1,JObjs[JLevel+1]);
-            end;
-            LevelOpCh[JLevel]:='(';
-            LevelBC[JLevel+1]:=LevelBC[JLevel];}
             Dec(LevelBC[JLevel]);
           end
           else
@@ -2478,8 +2617,7 @@ begin
         '[':  //数组下标
         begin
           Inc(BlockCnt);
-          //AddOp(Ch,amBlock);
-          AddOp(Ch,amBlockOp{amOperator},true);
+          AddOp(Ch,amBlockOp,true);
           LevelBC[JLevel]:=BlockCnt-1;
           Inc(I);
           FuncName:='';
@@ -2489,11 +2627,7 @@ begin
         begin
           JLevel:=BlockLevel;
           if JLevel<0 then
-            JLevel:=0
-          else if JLevel>0 then
-          begin
-
-          end;
+            JLevel:=0;
           Dec(BlockCnt);
           Inc(I);
           FuncName:='';
@@ -2624,12 +2758,11 @@ begin
     POutExprLen^:=i;
 end;
 
-class function TJSONExprParser.ExprToJSONStr(const Expr: String;
-  VarHelper: TJSONVarHelper): String;
+function TJSONExprParser.ExprToJSONStr(const Expr: String): String;
 var
   J:JSONObject;
 begin
-  J:=ExprToJSON(Expr,VarHelper);
+  J:=ExprToJSON(Expr);
   if J=nil then
     Result:=''
   else begin
@@ -2643,8 +2776,7 @@ begin
   Result:=LastExprType;
 end;
 
-class function TJSONExprParser.JSONToExpr(AObj: JSONObject; ParentOpRank: Integer;
-  VarHelper: TJSONVarHelper): String;
+function TJSONExprParser.JSONToExpr(AObj: JSONObject; ParentOpRank: Integer): String;
 var
   Func:String;
   IsCommonFunc:Boolean;
@@ -2663,12 +2795,12 @@ var
       if IsCommonFunc then  //只有一个参数的普通函数自带括号了
       begin
         if ParentOpRank<0 then
-          Result:=JSONToExpr(JSONObject(Z),ParentOpRank,VarHelper)
+          Result:=JSONToExpr(JSONObject(Z),ParentOpRank)
         else
-          Result:=JSONToExpr(JSONObject(Z),0,VarHelper)
+          Result:=JSONToExpr(JSONObject(Z),0)
       end
       else
-        Result:=JSONToExpr(JSONObject(Z),OpRk,VarHelper);
+        Result:=JSONToExpr(JSONObject(Z),OpRk);
     end
     else begin
       Result:=Z.toString;
@@ -2677,7 +2809,7 @@ var
         if Result[1]=BIOS_StrParamHeader then  //String
           Result:=QuotedStr(Copy(Result,2,MaxInt))
         else begin //Var Name
-          if (VarHelper<>nil) and VarHelper.GetVar(Result,v) then
+          if UseVarHelperOnTextGen and (VarHelper<>nil) and VarHelper.GetVar(Result,v) then
           begin
             Result:=VarToExprStr(v);
           end
@@ -2689,22 +2821,32 @@ var
   end;
 var
   i:Integer;
+  C1:Char;
+  BodyStr:String;
 begin
   Result:='';
   if AObj=nil then exit;
   Func:=AObj.OptString(BIOS_Operator);
-  IsCommonFunc:=(Func='') or not ((Func[1] in MathOp2+CompOp2+['.']+MathOp1) or (Func='AND') or (Func='OR') or (Func='IN') or (Func='IS') or (Func='XOR'));
+{$IFNDEF NO_OPTRANSLATE}
+  if OpHelper<>nil then  //2011-09-04
+    Func:=OpHelper.RestoreOperator(Func,AObj);
+{$ENDIF}
+  if Func<>'' then
+    C1:=Func[1]
+  else
+    C1:=#0;
+  IsCommonFunc:=(Func='') or not ((C1 in MathOp2+CompOp2+['.']+MathOp1) or (Func='AND') or (Func='OR') or (Func='IN') or (Func='IS') or (Func='XOR'));
   if IsCommonFunc or (ParentOpRank<0) then
     OpRk:=-1
   else
-    OpRk:=OpRank[Func[1]];
+    OpRk:=OpRank[C1];
   Result:=J2Str(AObj.Opt(BIOS_Param1));
   if Func='' then exit;
-  if (Func[1] in MathOp2+CompOp2+['.']+MathOp1) or (Func='AND') or (Func='OR') or (Func='IN') or (Func='IS') or (Func='XOR') then
+  if (C1 in MathOp2+CompOp2+['.']+MathOp1) or (Func='AND') or (Func='OR') or (Func='IN') or (Func='IS') or (Func='XOR') then
   begin
-    if Func[1] in MathOp2+CompOp2+['.'] then
+    if C1 in MathOp2+CompOp2+['.'] then
       Result:=Result+Func
-    else if Func[1] in MathOp1 then
+    else if C1 in MathOp1 then
     begin
       Result:=Func+Result;
       if (ParentOpRank<0) or (OpRk<ParentOpRank) then
@@ -2713,20 +2855,37 @@ begin
     end
     else
       Result:=Result+' '+Func+' ';
-    Result:=Result+J2Str(AObj.Opt(BIOS_ParamHeader+'2'));
-    if Func[1]=OpCh_Sentence then  //支持多个平行语句  2010-06-28
+    BodyStr:=J2Str(AObj.Opt(BIOS_ParamHeader+'2'));
+    if Func=BIOS_BodyDefOp then
+    begin
+      if (BodyStr='') or not ((BodyStr[1]='(') and (BodyStr[Length(BodyStr)]=')'))then
+        Result:=Result+'('+BodyStr+')'
+      else
+        Result:=Result+BodyStr;
+      exit;
+    end;
+    Result:=Result+BodyStr;
+    if C1=OpCh_Sentence then  //支持多个平行语句  2010-06-28
       for i:=3 to AObj.Length-1 do
         Result:=Result+Func+J2Str(AObj.Opt(BIOS_ParamHeader+IntToStr(i)));
     if (ParentOpRank<0) or (OpRk<ParentOpRank) then
       Result:='('+Result+')';
   end
   else begin
-    for i:=2 to Pred(AObj.Length) do
-      Result:=Result+','+J2Str(AObj.Opt(BIOS_ParamHeader+IntToStr(i)));
-    if Func[1]='[' then
+    if C1='[' then   // A[1]  =>  [,A,1
     begin
-      Result:='['+Result+']';
+      Result:=Result+'[';
+      for i:=2 to Pred(AObj.Length) do
+      begin
+        if i>2 then Result:=Result+',';
+        Result:=Result+J2Str(AObj.Opt(BIOS_ParamHeader+IntToStr(i)));
+      end;
+      Result:=Result+']';
       exit;
+    end
+    else begin
+      for i:=2 to Pred(AObj.Length) do
+        Result:=Result+','+J2Str(AObj.Opt(BIOS_ParamHeader+IntToStr(i)));
     end;
     Result:='('+Result+')';
     if Func<>'(' then  //集合以 "(" 做为操作符
@@ -2734,9 +2893,8 @@ begin
   end;
 end;
 
-class function TJSONExprParser.JSONToExpr2(AObj: JSONObject;
-  const Ident: Integer; ParentOpRank: Integer;
-  VarHelper: TJSONVarHelper): String;
+function TJSONExprParser.JSONToExpr2(AObj: JSONObject;
+  const Ident: Integer; ParentOpRank: Integer): String;
 var
   Func:String;
   IsCommonFunc:Boolean;
@@ -2755,12 +2913,12 @@ var
       if IsCommonFunc then  //只有一个参数的普通函数自带括号了
       begin
         if ParentOpRank<0 then
-          Result:=JSONToExpr(JSONObject(Z),ParentOpRank,VarHelper)
+          Result:=JSONToExpr(JSONObject(Z),ParentOpRank)
         else
-          Result:=JSONToExpr(JSONObject(Z),0,VarHelper)
+          Result:=JSONToExpr(JSONObject(Z),0)
       end
       else
-        Result:=JSONToExpr(JSONObject(Z),OpRk,VarHelper);
+        Result:=JSONToExpr(JSONObject(Z),OpRk);
     end
     else begin
       Result:=Z.toString;
@@ -2851,9 +3009,58 @@ begin
   end;
 end;
 
+procedure TJSONExprParser.RemoveFuncHelper(AHelper: TJEFuncHelper);
+var
+  h,LastH:TJEFuncHelper;
+begin
+  if AHelper=nil then exit;
+  h:=FuncHelper;
+  LastH:=h;
+  while h<>nil do
+  begin
+    if h=AHelper then
+    begin
+      if LastH<>h then
+        LastH.NextHelper:=h.NextHelper
+      else
+        FFuncHelper:=h.NextHelper;
+      exit;
+    end;
+    LastH:=h;
+    h:=h.NextHelper;
+  end;
+end;
+
+procedure TJSONExprParser.RemoveVarHelper(AHelper: TJEVarHelper);
+var
+  h,LastH:TJEVarHelper;
+begin
+  if AHelper=nil then exit;
+  h:=VarHelper;
+  LastH:=h;
+  while h<>nil do
+  begin
+    if h=AHelper then
+    begin
+      if LastH<>h then
+        LastH.NextHelper:=h.NextHelper
+      else
+        FVarHelper:=h.NextHelper;
+      exit;
+    end;
+    LastH:=h;
+    h:=h.NextHelper;
+  end;
+end;
+
 procedure TJSONExprParser.SetOnLineComplete(const Value: TTraceLineFunc);
 begin
   FOnLineComplete := Value;
+end;
+
+procedure TJSONExprParser.SetOpHelper(const Value: TJEOpHelper);
+begin
+  FOpHelper := Value;
 end;
 
 procedure TJSONExprParser.SetPrintFunc(const Value: TPrintFunc);
@@ -2864,6 +3071,16 @@ end;
 procedure TJSONExprParser.SetTraceOnLine(const Value: Boolean);
 begin
   FTraceOnLine := Value;
+end;
+
+procedure TJSONExprParser.SetUseVarHelperOnParse(const Value: Boolean);
+begin
+  FUseVarHelperOnParse := Value;
+end;
+
+procedure TJSONExprParser.SetUseVarHelperOnTextGen(const Value: Boolean);
+begin
+  FUseVarHelperOnTextGen := Value;
 end;
 
 procedure TJSONExprParser.SetVarToStrDefFunc(const Value: TVarToStrDefFunc);
@@ -2925,26 +3142,32 @@ begin
   Result:='0.3.4';
 end;
 
-{ TJSONVarHelper }
+{ TJEVarHelper }
 
-function TJSONVarHelper.CheckAndTransName(var VarName: String): Boolean;
+function TJEVarHelper.CallObjFunc(AObj: TObject; const Func: String;
+  Args: array of Variant): Variant;
+begin
+
+end;
+
+function TJEVarHelper.CheckAndTransName(var VarName: String): Boolean;
 begin
   Result:=true;
 end;
 
-procedure TJSONVarHelper.Clean;
+procedure TJEVarHelper.Clean;
 begin
 
 end;
 
 {$IFNDEF NO_COMPLEXOBJ}
-function TJSONVarHelper.EnterObj(const ObjName: String): Boolean;
+function TJEVarHelper.EnterObj(const ObjName: String): Boolean;
 begin
   Result:=false;
 end;
 {$ENDIF}
 
-function TJSONVarHelper.GetAsJSONString: String;
+function TJEVarHelper.GetAsJSONString: String;
 var
   J:JSONObject;
 begin
@@ -2954,12 +3177,22 @@ begin
   J.Free;
 end;
 
-function TJSONVarHelper.GetTraceOnSet: Boolean;
+function TJEVarHelper.GetObjAttr(AObj: TObject; const Attr: String): Variant;
+begin
+
+end;
+
+function TJEVarHelper.GetObjElement(AObj: TObject; const Index: Variant): Variant;
+begin
+
+end;
+
+function TJEVarHelper.GetTraceOnSet: Boolean;
 begin
   Result:=false;
 end;
 
-function TJSONVarHelper.GetVar(const VarName: String; out Val:Variant):Boolean;
+function TJEVarHelper.GetVar(const VarName: String; out Val:Variant):Boolean;
 begin
   if NextHelper<>nil then
     Result:=NextHelper.GetVar(VarName,Val)
@@ -2984,36 +3217,36 @@ begin
 end;
 {$ENDIF}
 
-function TJSONVarHelper.GetVarCount: Integer;
+function TJEVarHelper.GetVarCount: Integer;
 begin
   Result:=-1;
 end;
 
-function TJSONVarHelper.GetVarDef(const VarName: String;
+function TJEVarHelper.GetVarDef(const VarName: String;
   const Default: Variant): Variant;
 begin
   if not GetVar(VarName,Result) then
     Result:=Default;
 end;
 
-function TJSONVarHelper.GetVarNames(const Idx: Integer): String;
+function TJEVarHelper.GetVarNames(const Idx: Integer): String;
 begin
   Result:='';
 end;
 
-function TJSONVarHelper.GetVarObj(const VarName: String; out Obj: JSONObject): Boolean;
+function TJEVarHelper.GetVarObj(const VarName: String; out Obj: JSONObject): Boolean;
 begin
   Result:=false;
 end;
 
 {$IFNDEF NO_COMPLEXOBJ}
-function TJSONVarHelper.LeaveObj(const ObjName: String): Boolean;
+function TJEVarHelper.LeaveObj(const ObjName: String): Boolean;
 begin
   Result:=false;
 end;
 {$ENDIF}
 
-procedure TJSONVarHelper.SetAsJSONString(const Value: String);
+procedure TJEVarHelper.SetAsJSONString(const Value: String);
 var
   J:JSONObject;
 begin
@@ -3027,22 +3260,37 @@ begin
   J.Free;
 end;
 
-procedure TJSONVarHelper.SetNextHelper(const Value: TJSONVarHelper);
+procedure TJEVarHelper.SetNextHelper(const Value: TJEVarHelper);
 begin
   FNextHelper := Value;
 end;
 
-function TJSONVarHelper.SetObjectVar(const VarName: String; JObj: JSONObject): Boolean;
+function TJEVarHelper.SetObjAttr(AObj: TObject; const Attr: String; Val: Variant): Boolean;
 begin
   Result:=false;
 end;
 
-procedure TJSONVarHelper.SetTraceOnSet(const Value: Boolean);
+function TJEVarHelper.SetObjectVar(const VarName: String; JObj: JSONObject): Boolean;
+begin
+  Result:=false;
+end;
+
+function TJEVarHelper.SetObjElement(AObj: TObject; const Index: Variant; Val: Variant): Boolean;
+begin
+  Result:=false;
+end;
+
+function TJEVarHelper.SetObjVar(const VarName: String; AObj: TObject): Boolean;
+begin
+  Result:=false;
+end;
+
+procedure TJEVarHelper.SetTraceOnSet(const Value: Boolean);
 begin
 
 end;
 
-function TJSONVarHelper.SetVar(const VarName: String;
+function TJEVarHelper.SetVar(const VarName: String;
   const Val: Variant): Boolean;
 begin
   Result:=false;
@@ -3066,7 +3314,7 @@ begin
 end;
 {$ENDIF}
 
-function TJSONVarHelper.ValExport(PlainObj: JSONObject): Integer;
+function TJEVarHelper.ValExport(PlainObj: JSONObject): Integer;
 var
   i:Integer;
   mstr:String;
@@ -3094,7 +3342,7 @@ begin
   end;
 end;
 
-function TJSONVarHelper.ValImport(PlainObj: JSONObject): Integer;
+function TJEVarHelper.ValImport(PlainObj: JSONObject): Integer;
 var
   i:Integer;
   mstr:String;
@@ -3122,26 +3370,26 @@ begin
     end;
 end;
 
-function TJSONVarHelper.VarIsObj(const VarName: String): Boolean;
+function TJEVarHelper.VarIsObj(const VarName: String): Boolean;
 begin
   Result:=false;
 end;
 
-{ TJSONFuncHelper }
+{ TJEFuncHelper }
 
-function TJSONFuncHelper.GetValue(Sender: TJSONExprParser; const Func: String;
+function TJEFuncHelper.GetValue(Sender: TJSONExprParser; const Func: String;
   var Params: array of Variant; out Val: Variant; out OutParamIdx: TParamSet): Boolean;
 begin
   Result:=false;
 end;
 
-function TJSONFuncHelper.GetValue2(Sender: TJSONExprParser; FuncObj: JSONObject;
+function TJEFuncHelper.GetValue2(Sender: TJSONExprParser; FuncObj: JSONObject;
   var Params: array of Variant; out Val: Variant; out OutParamIdx: TParamSet): Boolean;
 begin
   Result:=false;
 end;
 
-procedure TJSONFuncHelper.SetNextHelper(const Value: TJSONFuncHelper);
+procedure TJEFuncHelper.SetNextHelper(const Value: TJEFuncHelper);
 begin
   FNextHelper := Value;
 end;

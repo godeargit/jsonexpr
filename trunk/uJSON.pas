@@ -25,6 +25,9 @@ Change Logs:
   Can parse #10 #13 inside a string.
   JSONObject.quote method can deal with special character smaller than space.
   Value inside a _String object can Read/Write directly.
+
+2011-09-02 By creation_zy
+  Add _Object to store common Object.
 }
 unit uJSON;
 
@@ -32,6 +35,8 @@ interface
 
 uses
   Windows,SysUtils, Classes,  TypInfo;
+
+{$DEFINE J_OBJECT}  // store common Object
 
 Type
   TZAbstractObject = class
@@ -55,7 +60,9 @@ Type
   _String = class;
   _Double = class;
   _NULL = class ;
+{$IFDEF J_OBJECT}
   _Object = class; //2011-08-09
+{$ENDIF}
 
 
   ParseException = class (Exception)
@@ -181,11 +188,12 @@ Type
     function TryNewJSONArray(const Key: String):JSONArray;
     function TryNewJSONObject(const Key: String):JSONObject;
     //Add by creation_zy  2011-08-09
+  {$IFDEF J_OBJECT}
     function GetObject (const key : string): TObject;
     function OptObject (const key : string): TObject; overload;
     function OptObject (const key : string; defaultValue: TObject): TObject; overload;
     function Put (const key : string; value : TObject): JSONObject; overload;
-
+  {$ENDIF}
 
     destructor Destroy;override;
     class function NULL : _NULL;
@@ -222,16 +230,25 @@ Type
     function optJSONObject (index : integer) : JSONObject ; overload;
     function optString (index : integer) : string; overload;
     function optString (index : integer; defaultValue : string) : string; overload;
+  {$IFDEF J_OBJECT}
+    function optObject (index : integer) : TObject; overload;
+  {$ENDIF}
     function put ( value : boolean) : JSONArray; overload ;
     function put ( value : double ) : JSONArray;   overload ;
     function put ( value : integer) : JSONArray;   overload ;
     function put ( value : TZAbstractObject) : JSONArray;  overload ;
-    function put ( value: string): JSONArray; overload;
+    function put ( value : string): JSONArray; overload;
+  {$IFDEF J_OBJECT}
+    function put ( value : TObject): JSONArray; overload;
+  {$ENDIF}
     function put ( index : integer ; value : boolean): JSONArray;  overload ;
     function put ( index : integer ; value : double) : JSONArray;  overload ;
     function put ( index : integer ; value : integer) : JSONArray;  overload ;
     function put ( index : integer ; value : TZAbstractObject) : JSONArray;  overload ;
     function put ( index: integer; value: string): JSONArray; overload;
+  {$IFDEF J_OBJECT}
+    function put ( index : integer ; value : TObject): JSONArray; overload;
+  {$ENDIF}
     function toJSONObject (names  :JSONArray ) : JSONObject ;  overload ;
     function toString : string; overload; override;
     function toString2 (indentFactor : integer) : string; overload;
@@ -312,18 +329,19 @@ Type
     function Clone :TZAbstractObject; override;  //By creation_zy  2009-12-11
   end;
 
+{$IFDEF J_OBJECT}
   _Object = class (TZAbstractObject)
     function Equals(const Value: TZAbstractObject): Boolean; override;
     function toString() : string; override;
     function Clone :TZAbstractObject; override;
   private
     fvalue: TObject;
-    FAsObject: TObject;
-    procedure SetAsObject(const Value: TObject);
     constructor Create(value: TObject);
+    procedure SetAsObject(const Value: TObject);
   public
-    property AsObject: TObject read FAsObject write SetAsObject;
+    property AsObject: TObject read fvalue write SetAsObject;
   end;
+{$ENDIF}
 
 function IsConstJSON(Z: TObject):Boolean;
 
@@ -1555,6 +1573,7 @@ begin
     Result := nil;
 end;
 
+{$IFDEF J_OBJECT}
 function JSONObject.OptObject(const key: string;
   defaultValue: TObject): TObject;
 var
@@ -1577,6 +1596,7 @@ begin
   else
     Result := nil;
 end;
+{$ENDIF}
 
 (**
      * Get an optional string associated with a key.
@@ -1709,11 +1729,13 @@ begin
   Result := self;
 end;
 
+{$IFDEF J_OBJECT}
 function JSONObject.Put(const key: string; value: TObject): JSONObject;
 begin
   put(key, _Object.create(value));
   Result := self;
 end;
+{$ENDIF}
 
 (**
      * Put a key/value pair in the JSONObject, but only if the
@@ -3224,13 +3246,24 @@ var
   o : TZAbstractObject;
 begin
   o := opt(index);
-  if (o is JSONObject) then begin
-      Result := JSONObject (o);
-  end else begin
-      Result := nil;
-  end;
+  if o is JSONObject then
+    Result := JSONObject (o)
+  else
+    Result := nil;
 end;
 
+{$IFDEF J_OBJECT}
+function JSONArray.optObject(index: integer): TObject;
+var
+  o : TZAbstractObject;
+begin
+  o := opt(index);
+  if o is _Object then
+    Result:=_Object(o).fvalue
+  else
+    Result := nil;
+end;
+{$ENDIF}
 
 (**
  * Get the optional string value associated with an index. It returns an
@@ -3259,13 +3292,11 @@ var
 begin
   o := opt(index);
   if (o <> nil) then begin
-     Result := o.toString();
+    Result := o.toString();
   end else begin
-     Result := defaultValue;
+    Result := defaultValue;
   end;
 end;
-
-
 
 (**
  * Append a boolean value.
@@ -3287,8 +3318,8 @@ end;
  *)
 function JSONArray.put(value: double): JSONArray;
 begin
-    put(_Double.create(value));
-    Result := self;
+  put(_Double.create(value));
+  Result := self;
 end;
 
 (**
@@ -3306,10 +3337,17 @@ end;
 
 function JSONArray.put(value: string): JSONArray;
 begin
-    put (_String.create (value));
-    Result := self;
+  put (_String.create (value));
+  Result := self;
 end;
 
+{$IFDEF J_OBJECT}
+function JSONArray.put ( value : TObject): JSONArray;
+begin
+  put (_Object.create (value));
+  Result := self;
+end;
+{$ENDIF}
 
 (**
  * Append an object value.
@@ -3320,8 +3358,8 @@ end;
  *)
 function JSONArray.put(value: TZAbstractObject): JSONArray;
 begin
-    myArrayList.add(value);
-    Result := self;
+  myArrayList.add(value);
+  Result := self;
 end;
 
 (**
@@ -3382,6 +3420,14 @@ begin
   end;
   Result := self;
 end;
+
+{$IFDEF J_OBJECT}
+function JSONArray.put(index: integer; value: TObject): JSONArray;
+begin
+  put (index,_Object.create(value));
+  Result := self;
+end;
+{$ENDIF}
 
 (**
  * Produce a JSONObject by combining a JSONArray of names with the values
@@ -3608,6 +3654,7 @@ begin
   Result := Format('%s <%p>', [ClassName, addr(Self)]);
 end;
 
+{$IFDEF J_OBJECT}
 { _Object }
 
 function _Object.Clone: TZAbstractObject;
@@ -3627,7 +3674,7 @@ end;
 
 procedure _Object.SetAsObject(const Value: TObject);
 begin
-  FAsObject := Value;
+  fvalue := Value;
 end;
 
 function _Object.toString: string;
@@ -3637,6 +3684,7 @@ begin
   else
     Result:=fvalue.ClassName+'::'+IntToHex(Integer(fvalue),8);
 end;
+{$ENDIF}
 
 initialization
   CONST_FALSE :=  _Boolean.create (false);
