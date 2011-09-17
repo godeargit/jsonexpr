@@ -6,7 +6,7 @@ uses
   uJSON, UJSONExpr, Variants, SysUtils;
 
 type
-  TStrFuncHelper=class(TJSONFuncHelper)
+  TStrFuncHelper=class(TJEFuncHelper)
     function GetValue(Sender: TJSONExprParser; const Func: String;
       var Params: array of Variant; out Val:Variant;
       out OutParamIdx: TParamSet):Boolean; override;
