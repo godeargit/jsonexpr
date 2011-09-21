@@ -110,7 +110,16 @@ ver 0.3.4  By creation_zy  (无尽愿)
   Add Print procedure.
 
 2011-09-07
-ver 0.3.4  By creation_zy  (无尽愿)
+ver 0.3.5  By creation_zy  (无尽愿)
+  Support operator transfer like "==" -> "=".
+
+2011-09-20
+var 0.4.0  By creation_zy  (无尽愿)
+  Can parse define with perfix like:
+      public function Add(A,B):=(A+B);
+      const PI:=3.14159;
+      abstract class TPlane(Object);
+  Add function "IsArray"
 }
 
 unit UJSONExpr;
@@ -132,15 +141,19 @@ uses
 
 const
   varObject=varAny+$1000;
-  BIOS_Operator='op';
-  BIOS_ParamHeader='p';
-  BIOS_Param1='p1';
-  BIOS_Param2='p2';
-  BIOS_StrParamHeader='''';    //为了将字符串与变量名相区别，所有字符串值均带单引号前缀
-  BIOS_VarTag='"';             //支持由"包围的变量名，如 "No.1 Var", ":-)", "He ""!""" ——变量名不能以'开头
-  BIOS_BodyDefOp='::=';        //  Add(x,y)::=(x+y);
-  BIOS_Class='class';          //  TFoo:Class(TObject)::=(Name:String; ID:Int);
-  BIOS_Eval='EVAL';            //表达式求值
+  JEP_Operator='op';
+  JEP_Name='pn';
+  JEP_Perfix='p0';
+  JEP_Type='tp';
+  JEP_Body='pb';
+  JEP_ParamHeader='p';
+  JEP_Param1='p1';
+  JEP_Param2='p2';
+  JEP_StrParamHeader='''';    //为了将字符串与变量名相区别，所有字符串值均带单引号前缀
+  JEP_VarTag='"';             //支持由"包围的变量名，如 "No.1 Var", ":-)", "He ""!""" ——变量名不能以'开头
+  JEP_BodyDefOp=':=';         //  Add(x,y):=(x+y);
+  JEP_Class='class';          //  TFoo:Class(TObject)::=(Name:String; ID:Int);
+  JEP_Eval='EVAL';            //表达式求值
 type
   TParamIdxs=(pi1,pi2,pi3,pi4,pi5,pi6,pi7,pi8);
   TParamSet=set of TParamIdxs;
@@ -365,8 +378,8 @@ type
 function VarEqual(const v1, v2: Variant):Boolean;
 function VarToJSONObj(v: Variant):TZAbstractObject;
 function VarFromJSON(Z:TZAbstractObject):Variant;
-function Obj2Var(O: TObject): Variant; inline;
-function Var2Obj(V: Variant): TObject; inline;
+function Obj2Var(O: TObject): Variant; {$IF COMPILERVERSION>=18}inline;{$IFEND}
+function Var2Obj(V: Variant): TObject; {$IF COMPILERVERSION>=18}inline;{$IFEND}
 
 var
   DblQuotationAsString:Boolean=false;    //是否将双引号内的内容当成字符串
@@ -385,6 +398,7 @@ const
   OpCh_None:TOpChar=#0;
   OpCh_Func:TOpChar=#255;
   OpCh_Sentence:TOpChar=';';
+  OpCh_Define:TOpChar=' ';   //2011-09-18
   Digits: set of Char=['0'..'9'];
   VarBegin: set of Char=['a'..'z', 'A'..'Z', '_', '$', '@', #129..#254];  //允许$,@以及汉字
   VarBody: set of Char=['a'..'z', 'A'..'Z', '_', '$', '@', '0'..'9', #129..#254];
@@ -426,6 +440,7 @@ begin
   OpRank['I']:=r; Dec(r,20);  //IN IS
   OpRank[':']:=r; OpRank[',']:=r; Dec(r,20);  //:=
   OpRank[';']:=r; //Sentence end
+  OpRank[OpCh_Define]:=r+1;  //Define  2011-09-18
 end;
 
 function IsNormalVarName(const Name: String):Boolean;
@@ -831,19 +846,19 @@ end;
 function TJSONExprParser.Eval(AObj: TZAbstractObject): Variant;
   function GetP1:Variant;
   begin
-    Result:=Eval(JSONObject(AObj).Opt(BIOS_Param1));
+    Result:=Eval(JSONObject(AObj).Opt(JEP_Param1));
   end;
   function GetP2:Variant;
   begin
-    Result:=Eval(JSONObject(AObj).Opt(BIOS_Param2));
+    Result:=Eval(JSONObject(AObj).Opt(JEP_Param2));
   end;
   function GetP3:Variant;
   begin
-    Result:=Eval(JSONObject(AObj).Opt(BIOS_ParamHeader+'3'));
+    Result:=Eval(JSONObject(AObj).Opt(JEP_ParamHeader+'3'));
   end;
   function GetPN(n:Integer):Variant;
   begin
-    Result:=Eval(JSONObject(AObj).Opt(BIOS_ParamHeader+IntToStr(n)));
+    Result:=Eval(JSONObject(AObj).Opt(JEP_ParamHeader+IntToStr(n)));
   end;
   function GetParams(JObj: JSONObject):TVarAy;
   var
@@ -868,13 +883,13 @@ function TJSONExprParser.Eval(AObj: TZAbstractObject): Variant;
     Result:=false;
     v1:=GetP1;
     NullVal:=VarIsNull(v1);
-    Z:=JSONObject(AObj).Opt(BIOS_ParamHeader+'2');
+    Z:=JSONObject(AObj).Opt(JEP_ParamHeader+'2');
     if Z=nil then exit;
-    if (Z.ClassType=JSONObject) and (JSONObject(Z).OptString(BIOS_Operator)='(') then
+    if (Z.ClassType=JSONObject) and (JSONObject(Z).OptString(JEP_Operator)='(') then
     begin
       for i:=1 to Pred(JSONObject(Z).Length) do
       begin
-        v2:=Eval(JSONObject(Z).Opt(BIOS_ParamHeader+IntToStr(i)));
+        v2:=Eval(JSONObject(Z).Opt(JEP_ParamHeader+IntToStr(i)));
         if NullVal then
         begin
           if VarIsNull(v2) then
@@ -959,7 +974,7 @@ function TJSONExprParser.Eval(AObj: TZAbstractObject): Variant;
         exit;
       end;
       try
-        v1:=Eval(JSONObject(AObj).Opt(BIOS_ParamHeader+IntToStr(i)));
+        v1:=Eval(JSONObject(AObj).Opt(JEP_ParamHeader+IntToStr(i)));
         idx:=v1;
         if (idx>=0) and (idx<=VarArrayHighBound(Result,1)) then
           Result:=Result[idx];
@@ -968,7 +983,7 @@ function TJSONExprParser.Eval(AObj: TZAbstractObject): Variant;
       end;
     end;
   end;
-  procedure SetValue(Val: Variant; const PName: String=BIOS_Param1);
+  procedure SetValue(Val: Variant; const PName: String=JEP_Param1);
   var
     Z,Z2:TZAbstractObject;
     mstr:String;
@@ -980,7 +995,7 @@ function TJSONExprParser.Eval(AObj: TZAbstractObject): Variant;
       begin
         mstr:=Z.toString;
         if mstr='' then exit;
-        if mstr[1]<>BIOS_StrParamHeader {in VarBegin} then
+        if mstr[1]<>JEP_StrParamHeader {in VarBegin} then
           VarHelper.SetVar(mstr,Result);
       end
       else if Z.ClassType=JSONObject then  //赋值表达式的左部是复合表达式  2010-04-04
@@ -993,14 +1008,14 @@ function TJSONExprParser.Eval(AObj: TZAbstractObject): Variant;
           VarHelper.SetVar2(JSONObject(Z),Result);
         {$ENDIF}
         {$ELSE}
-          Z2:=JSONObject(Z).Opt(BIOS_Param1);
+          Z2:=JSONObject(Z).Opt(JEP_Param1);
           if Z2 is _String then
           begin
             with VarHelper do
             begin
               if EnterObj(Z2.toString) then
               begin
-                SetVar(JSONObject(Z).OptString(BIOS_Param2),Result);
+                SetVar(JSONObject(Z).OptString(JEP_Param2),Result);
                 LeaveObj('');
               end;
             end;
@@ -1049,7 +1064,7 @@ begin
     if AObj.ClassType=_String then
     begin
       mstr:=_String(AObj).toString;
-      if (mstr<>'') and (mstr[1]<>BIOS_StrParamHeader) then  //变量名
+      if (mstr<>'') and (mstr[1]<>JEP_StrParamHeader) then  //变量名
       begin
         if VarHelper<>nil then
           VarHelper.GetVar(mstr,Result);
@@ -1092,9 +1107,9 @@ begin
           if OutSet<>[] then
           begin
             if pi1 in OutSet then
-              SetValue(VParams[0],BIOS_Param1);
+              SetValue(VParams[0],JEP_Param1);
             if pi2 in OutSet then
-              SetValue(VParams[1],BIOS_Param2);
+              SetValue(VParams[1],JEP_Param2);
           end;
           SetLength(VParams,0);
         end;
@@ -1107,7 +1122,7 @@ begin
             for i:=Integer(Low(TParamIdxs)) to Integer(High(TParamIdxs)) do
             begin
               if TParamIdxs(i) in OutSet then
-                SetValue(VParams[i],BIOS_ParamHeader+IntToStr(i));
+                SetValue(VParams[i],JEP_ParamHeader+IntToStr(i));
             end;
           end;
         end;
@@ -1139,7 +1154,7 @@ begin
             VarHelper.GetVar2(JSONObject(AObj),Result);
           {$ENDIF}
           {$ELSE}
-            Z2:=JSONObject(AObj).Opt(BIOS_Param1);
+            Z2:=JSONObject(AObj).Opt(JEP_Param1);
             if Z2 is _String then
             begin
               with VarHelper do
@@ -1166,7 +1181,7 @@ begin
             {$IFNDEF NO_TRACE}
               if TraceOnLine then
               begin
-                Z:=JSONObject(AObj).Opt(BIOS_Param1);
+                Z:=JSONObject(AObj).Opt(JEP_Param1);
                 if Assigned(FOnLineComplete) then
                   FOnLineComplete(Self,JSONObject(Z),Result);
               end;
@@ -1175,7 +1190,7 @@ begin
             {$IFNDEF NO_TRACE}
               if TraceOnLine then
               begin
-                Z:=JSONObject(AObj).Opt(BIOS_ParamHeader+'2');
+                Z:=JSONObject(AObj).Opt(JEP_ParamHeader+'2');
                 if Assigned(FOnLineComplete) then
                   FOnLineComplete(Self,JSONObject(Z),Result);
               end;
@@ -1187,7 +1202,7 @@ begin
               {$IFNDEF NO_TRACE}
                 if TraceOnLine then
                 begin
-                  Z:=JSONObject(AObj).Opt(BIOS_ParamHeader+IntToStr(i));
+                  Z:=JSONObject(AObj).Opt(JEP_ParamHeader+IntToStr(i));
                   if Assigned(FOnLineComplete) then
                     FOnLineComplete(Self,JSONObject(Z),Result);
                 end;
@@ -1199,7 +1214,7 @@ begin
             {$IFNDEF NO_TRACE}
               if TraceOnLine then
               begin
-                Z:=JSONObject(AObj).Opt(BIOS_Param1);
+                Z:=JSONObject(AObj).Opt(JEP_Param1);
                 if Assigned(FOnLineComplete) then
                   FOnLineComplete(Self,JSONObject(Z),Result);
               end;
@@ -1501,7 +1516,7 @@ begin
             else
               Done:=false;
           'E':
-            if Func=BIOS_Eval then  //2011-09-03
+            if Func=JEP_Eval then  //2011-09-03
             begin
               Result:=DoEval(GetP1);
             end
@@ -1649,6 +1664,15 @@ begin
             end
             else
               Done:=false;
+          'I':
+            if Func='ISARRAY' then
+            begin
+              Result:=GetP1;
+              if VarIsArray(Result) then
+                Result:=GetP2;
+            end
+            else
+              Done:=false;
           else
             Done:=false;
         end;
@@ -1691,9 +1715,9 @@ begin
           if OutSet<>[] then
           begin
             if pi1 in OutSet then
-              SetValue(VParams[0],BIOS_Param1);
+              SetValue(VParams[0],JEP_Param1);
             if pi2 in OutSet then
-              SetValue(VParams[1],BIOS_Param2);
+              SetValue(VParams[1],JEP_Param2);
           end;
           SetLength(VParams,0);
         end;
@@ -1706,7 +1730,7 @@ begin
             for i:=Integer(Low(TParamIdxs)) to Integer(High(TParamIdxs)) do
             begin
               if TParamIdxs(i) in OutSet then
-                SetValue(VParams[i],BIOS_ParamHeader+IntToStr(i+1));
+                SetValue(VParams[i],JEP_ParamHeader+IntToStr(i+1));
             end;
           end;
         end;
@@ -1719,15 +1743,15 @@ end;
 function TJSONExprParser.EvalNumber(AObj: TZAbstractObject; out Val: Double):Boolean;
   function GetP1(var OK: Boolean):Double;
   begin
-    OK:=EvalNumber(JSONObject(AObj).Opt(BIOS_Param1),Result);
+    OK:=EvalNumber(JSONObject(AObj).Opt(JEP_Param1),Result);
   end;
   function GetP2(var OK: Boolean):Double;
   begin
-    OK:=EvalNumber(JSONObject(AObj).Opt(BIOS_Param2),Result);
+    OK:=EvalNumber(JSONObject(AObj).Opt(JEP_Param2),Result);
   end;
   function GetPN(n:Integer; var OK: Boolean):Double;
   begin
-    OK:=EvalNumber(JSONObject(AObj).Opt(BIOS_ParamHeader+IntToStr(n)),Result);
+    OK:=EvalNumber(JSONObject(AObj).Opt(JEP_ParamHeader+IntToStr(n)),Result);
   end;
   function GetParams(JObj: JSONObject; var OK: Boolean):TVarAy;
   var
@@ -1753,14 +1777,14 @@ function TJSONExprParser.EvalNumber(AObj: TZAbstractObject; out Val: Double):Boo
   begin
     Val:=GetP2(Result);  //将右侧表达式的值做为整个赋值过程的值
     if not Result then exit;
-    Z:=JSONObject(AObj).Opt(BIOS_Param1);
+    Z:=JSONObject(AObj).Opt(JEP_Param1);
     if Z<>nil then
     begin
       if Z.ClassType=_String then
       begin
         mstr:=Z.toString;
         if mstr='' then exit;
-        if mstr[1]<>BIOS_StrParamHeader {in VarBegin} then
+        if mstr[1]<>JEP_StrParamHeader {in VarBegin} then
           VarHelper.SetVar(mstr,Val);
       end;
     end;
@@ -1784,7 +1808,7 @@ begin
     if AObj.ClassType=_String then
     begin
       mstr:=_String(AObj).toString;
-      if (mstr<>'') and (mstr[1]<>BIOS_StrParamHeader) then  //变量名
+      if (mstr<>'') and (mstr[1]<>JEP_StrParamHeader) then  //变量名
       begin
         if VarHelper<>nil then
           VarHelper.GetVar(mstr,v);
@@ -1954,7 +1978,7 @@ type
 var
   SubString: String;
   //Use this function to check whether the name is a var or a function.
-  function NextIsBlockBegin(StartPos: Integer):Boolean;
+  function NextIsBlockBegin(StartPos: Integer):Boolean;//{$IF COMPILERVERSION>=18}inline;{$IFEND}
   begin
     Result:=false;
     for StartPos:=StartPos to Pred(Length(SubString)) do
@@ -1969,12 +1993,13 @@ var
   LevelBC:array[0..64] of Integer;  //Block depth in eath level.  括号层级
   LevelOpCh:array[0..64] of TOpChar;  //各个层次的操作符  如果是普通函数或者没有操作符，就是#0
   JLevel,BlockCnt:Integer;
-  function ExprLevel:Integer;
+  EndPos:Integer;
+  LastIsVar:Boolean;
+  function ExprLevel:Integer;//{$IF COMPILERVERSION>=18}inline;{$IFEND}
   begin
-    if (JObjs[JLevel]=nil) or (JObjs[JLevel].ClassType=JSONObject) then
-      Result:=JLevel
-    else
-      Result:=JLevel-1;
+    Result:=JLevel;
+    if (JObjs[JLevel]=nil) or (JObjs[JLevel].ClassType=JSONObject) then exit;
+    Dec(Result);  //Result:=JLevel-1;
   end;
   function FuncLevel:Integer;
   begin
@@ -2015,7 +2040,7 @@ var
         Dec(Result);
         if Result<0 then break;
         if LevelOpCh[Result]=OpCh_Func then continue; //函数优先级最高，无需比较
-        Op:=JSONObject(JObjs[Result]).OptString(BIOS_Operator);
+        Op:=JSONObject(JObjs[Result]).OptString(JEP_Operator);
         if Op<>'' then
           if OpRank[Op[1]]<Rank then break;
       until LevelBC[Result]<BlockCnt;
@@ -2025,7 +2050,7 @@ var
       begin
         Dec(Result);
         if Result<0 then break;
-        Op:=JSONObject(JObjs[Result]).OptString(BIOS_Operator);
+        Op:=JSONObject(JObjs[Result]).OptString(JEP_Operator);
         if Op<>'' then
           if OpRank[Op[1]]<Rank then break;
       end;
@@ -2039,7 +2064,7 @@ var
     with JSONObject(JObjs[e]) do
     begin
       n:=Length;
-      Put(BIOS_ParamHeader+IntToStr(n),F);
+      Put(JEP_ParamHeader+IntToStr(n),F);
       JLevel:=e+1;
       JObjs[JLevel]:=ValObjByIndex[n];
       LevelBC[JLevel]:=BlockCnt;
@@ -2062,7 +2087,7 @@ var
     with JSONObject(JObjs[e]) do
     begin
       n:=Length;
-      Put(BIOS_ParamHeader+IntToStr(n),BIOS_StrParamHeader+S);
+      Put(JEP_ParamHeader+IntToStr(n),JEP_StrParamHeader+S);
       JLevel:=e+1;
       JObjs[JLevel]:=ValObjByIndex[n];
       LevelBC[JLevel]:=BlockCnt;
@@ -2083,7 +2108,7 @@ var
     with JSONObject(JObjs[e]) do
     begin
       n:=Length;
-      Put(BIOS_ParamHeader+IntToStr(n),J);
+      Put(JEP_ParamHeader+IntToStr(n),J);
       JLevel:=e+1;
       JObjs[JLevel]:=ValObjByIndex[n];
       LevelBC[JLevel]:=BlockCnt;
@@ -2098,7 +2123,7 @@ var
     with JSONObject(JObjs[e]) do
     begin
       n:=Length;
-      Put(BIOS_ParamHeader+IntToStr(n),B);
+      Put(JEP_ParamHeader+IntToStr(n),B);
       JLevel:=e+1;
       JObjs[JLevel]:=ValObjByIndex[n];
       LevelBC[JLevel]:=BlockCnt;
@@ -2113,7 +2138,7 @@ var
     with JSONObject(JObjs[e]) do
     begin
       n:=Length;
-      Put(BIOS_ParamHeader+IntToStr(n),CNULL);
+      Put(JEP_ParamHeader+IntToStr(n),CNULL);
       JLevel:=e+1;
       JObjs[JLevel]:=ValObjByIndex[n];
       LevelBC[JLevel]:=BlockCnt;
@@ -2136,15 +2161,20 @@ var
   var
     e,n:Integer;
     v:Variant;
+    mstr:String;
   begin
     e:=ExprLevel;
     with JSONObject(JObjs[e]) do
     begin
       n:=Length;
-      if (n>1) and (OptString(BIOS_Operator)='') then  //已经有了一个参数，但还缺少操作符
+      if n>1 then
       begin
-        Result:=false;
-        exit;
+        mstr:=OptString(JEP_Operator);
+        if (mstr='') or ((n>2) and (mstr=';') and LastIsVar) then  //已经有了一个参数，但还缺少操作符
+        begin
+          Result:=false;
+          exit;
+        end;
       end;
       if (VarHelper<>nil) and UseVarHelperOnParse then
       begin
@@ -2162,38 +2192,103 @@ var
           exit;
         end;
       end;
-      Put(BIOS_ParamHeader+IntToStr(n),VarName);
+      Put(JEP_ParamHeader+IntToStr(n),VarName);
       JLevel:=e+1;
       JObjs[JLevel]:=ValObjByIndex[n];
       LevelBC[JLevel]:=BlockCnt;
       LevelOpCh[JLevel]:=OpCh_None;
     end;
+    LastIsVar:=true;
     Result:=true;
   end;
-  procedure AddOp({$IFDEF NO_OPTRANSLATE}const {$ENDIF}Func: String; AddMode: TAddMode=amOperator; UsePiror: Boolean=false);
-    function NewFuncObj:JSONObject;
-    begin
-      Result:=JSONObject.Create;
-      Result.Put(BIOS_Operator,Func);
-    end;
+  function NewFuncObj(const AFunc: String):JSONObject; {$IF COMPILERVERSION>=18}inline;{$IFEND}
+  begin
+    Result:=JSONObject.Create.Put(JEP_Operator,AFunc);
+  end;
+  function WritePerfix(const Perfix: String; const IsEnd: Boolean):Boolean;
   var
-    IsEmpty:Boolean;
-    n:Integer;
-    Z:TZAbstractObject;
-    J,JP,JN:JSONObject;
-    mstr:String;
-    label CommonCase;
+    e,n,i:Integer;
+    v:Variant;
+    mstr,KeyStr:String;
+    Z,Z2:TZAbstractObject;
+    IsStdOp:Boolean;
+  begin
+    e:=ExprLevel;
+    with JSONObject(JObjs[e]) do
+    begin
+      n:=Length;
+      mstr:=OptString(JEP_Operator);
+      if mstr<>'' then  //有操作符 -- 可能是  ... ; var X ...
+      begin
+        if mstr<>' ' then        
+        begin
+          //将最后一个提取出来
+          KeyStr:=KeyByIndex[Length-1];  //类型指示符
+          JObjs[JLevel]:=NewFuncObj(' ');
+          Z:=Remove(KeyStr);
+          JSONObject(JObjs[JLevel]).Put(JEP_Param1,Z);
+          Put(KeyStr,JObjs[JLevel]);
+          Inc(JLevel);
+          JObjs[JLevel]:=Z;
+          LevelBC[JLevel]:=BlockCnt;
+          LevelOpCh[JLevel]:=OpCh_Define;
+          Result:=WritePerfix(Perfix,IsEnd);
+          exit;
+        end
+        else begin  {op:" ",p1:"public",p2:"abstract",p3...}
+          IsStdOp:=true;
+        end;
+      end;
+      if not IsEnd then
+        Put(JEP_ParamHeader+IntToStr(n),Perfix)
+      else begin
+        if length>1 then
+        begin
+          //将修饰符转化为 perfix （数组）
+          //如 'private const' -> {op:"",p1:"public",p2:"const"}
+          //转化为: {op:" const",pf:["private"], p1:"A", ....... }
+          KeyStr:=KeyByIndex[Length-1];  //类型指示符
+          mstr:=' '+OptString(KeyStr);
+          Put(JEP_Operator,mstr);
+          CleanKey(KeyStr);
+          if Length>1 then
+          begin
+            Z:=JSONArray.Create;
+            for i:=1 to length-1 do
+            begin
+              Z2:=Remove(JEP_ParamHeader+IntToStr(i));
+              if Z2<>nil then
+                JSONArray(Z).put(Z2);
+            end;
+            Put(JEP_Perfix,Z);
+          end;
+          LevelOpCh[e]:=OpCh_Define;
+          Put(JEP_Param1,Perfix);
+          LevelOpCh[JLevel]:=OpCh_Define;
+        end;
+      end;
+    end;
+    Result:=true;
+  end;
+  procedure InitLevel;
   begin
     //初始的情况
     if (JObjs[JLevel]=nil) then
     begin
-      JObjs[JLevel]:=NewFuncObj;
-      if Func<>'' then
-        LevelOpCh[JLevel]:=Func[1]
-      else
-        LevelOpCh[JLevel]:=OpCh_None;
-      exit;
-    end;
+      JObjs[JLevel]:=NewFuncObj('');
+      LevelOpCh[JLevel]:=OpCh_None;
+    end;  
+  end;
+  procedure AddOp({$IFDEF NO_OPTRANSLATE}const {$ENDIF}Func: String; AddMode: TAddMode=amOperator; UsePiror: Boolean=false);
+  var
+    IsEmpty:Boolean;
+    i,n:Integer;
+    Z,Z2:TZAbstractObject;
+    J,JP,JN:JSONObject;
+    mstr:String;
+    label CommonCase;
+  begin
+    LastIsVar:=false;
   {$IFNDEF NO_OPTRANSLATE}
     if OpHelper<>nil then  //2011-09-04
       Func:=OpHelper.TranslateOperator(Func,JObjs[JLevel]);
@@ -2209,7 +2304,41 @@ var
         //没有操作符的表达式 -- 填入Func
         if LevelOpCh[n]=OpCh_None then
         begin
-          JP.Put(BIOS_Operator,Func);
+          //处理 ... var A:... 的情况  2011-09-18
+          with JP do
+            if length>2 then
+            begin
+              //将修饰符转化为 perfix （数组）
+              //如 'private const A' -> {op:"",p1:"public",p2:"const",p3:"A"}
+              //转化为: {op:" const",pf:["private"], pn:"A", ....... }
+              //倒数第二个是类型指示符
+              mstr:=' '+ValByIndex[Length-2];
+              Put(JEP_Operator,mstr);
+              Delete(length-2);
+              if Length>2 then
+              begin
+                Z:=JSONArray.Create;
+                for i:=1 to length-2 do
+                begin
+                  Z2:=Remove(JEP_ParamHeader+IntToStr(i));
+                  if Z2<>nil then
+                    JSONArray(Z).put(Z2);
+                end;
+                Put(JEP_Perfix,Z);
+              end;
+              mstr:=ValByIndex[Length-1];
+              Delete(length-1);
+              //将操作符置于内层  如： var A:int;  const M=100;
+              JObjs[JLevel]:=NewFuncObj(Func).Put(JEP_Param1,mstr);
+              Put(JEP_Param1,JObjs[JLevel]);
+              LevelOpCh[n]:=OpCh_Define;
+              if AddMode=amOperator then
+                LevelOpCh[JLevel]:=Func[1] //AddMode;
+              else
+                LevelOpCh[JLevel]:=OpCh_Func;
+              exit;
+            end;
+          JP.Put(JEP_Operator,Func);
           if (AddMode=amOperator) or (AddMode=amBlockOp) then  //2011-09-01
             LevelOpCh[n]:=Func[1]
           else if AddMode=amFunc then
@@ -2235,8 +2364,8 @@ var
           mstr:=KeyByIndex[Length-1];  //最后一个Key
           Z:=Remove(mstr);
         end;
-        JObjs[JLevel]:=NewFuncObj;
-        JSONObject(JObjs[JLevel]).Put(BIOS_Param1,Z);
+        JObjs[JLevel]:=NewFuncObj(Func);
+        JSONObject(JObjs[JLevel]).Put(JEP_Param1,Z);
         JP.Put(mstr,JObjs[JLevel]);
         if Func='' then
           LevelOpCh[JLevel]:=OpCh_None
@@ -2249,7 +2378,39 @@ var
         n:=JLevel-1;
         if LevelOpCh[n]=OpCh_None then
         begin
-          JSONObject(JObjs[n]).Put(BIOS_Operator,Func);
+          if Func<>'' then
+          begin
+            //将修饰符转化为 perfix （数组）  2011-09-18
+            //如 'public static function' -> {op:"",p1:"public",p2:"static",p3:"function"}
+            //转化为: {op:" function",pf:["public","static"], ....... }
+            with JSONObject(JObjs[n]) do
+            begin
+              //最后一个是类型指示符
+              if Length>1 then
+              begin
+                mstr:=' '+ValByIndex[Length-1];
+                Put(JEP_Operator,mstr);
+                Delete(length-1);
+              end;
+              if Length>1 then
+              begin
+                Z:=JSONArray.Create;
+                for i:=1 to length-1 do
+                begin
+                  Z2:=Remove(JEP_ParamHeader+IntToStr(i));
+                  if Z2<>nil then
+                    JSONArray(Z).put(Z2);
+                end;
+                Put(JEP_Perfix,Z);
+              end;
+              JObjs[JLevel]:=NewFuncObj(Func);
+              Put(JEP_Param1,JObjs[JLevel]);
+            end;
+            LevelOpCh[n]:=OpCh_Define;
+            LevelOpCh[JLevel]:=OpCh_Func;
+            exit;
+          end;
+          JSONObject(JObjs[n]).Put(JEP_Operator,Func);
           if Func='' then
             LevelOpCh[n]:=OpCh_None
           else if AddMode=amOperator then
@@ -2277,7 +2438,7 @@ var
       IsEmpty:=false;
     if ((AddMode=amOperator) or IsEmpty) and (LevelOpCh[JLevel]=OpCh_None) then
     begin
-      J.Put(BIOS_Operator,Func);
+      J.Put(JEP_Operator,Func);
       //LevelOpCh[JLevel]:=AddMode;
       if AddMode=amOperator then
         LevelOpCh[JLevel]:=Func[1] //AddMode;
@@ -2289,7 +2450,7 @@ var
     else if (LevelOpCh[JLevel]=OpCh_Sentence) and (Func=';') then  //平级的 ; 号   2010-06-28
       exit
     else begin
-      JN:=NewFuncObj;
+      JN:=NewFuncObj(Func);
       JObjs[JLevel+1]:=JN;
       //按照左侧优先结合的规律进行重新组合——考虑运算符的优先级
       // not X  =>  (not X) or Y
@@ -2304,8 +2465,8 @@ var
           else begin
             with J do
             begin
-              mstr:=BIOS_ParamHeader+IntToStr(Length-1);
-              JN.Put(BIOS_ParamHeader+'1',Remove(mstr));
+              mstr:=JEP_ParamHeader+IntToStr(Length-1);
+              JN.Put(JEP_ParamHeader+'1',Remove(mstr));
               Put(mstr,JN);
             end;
             Inc(JLevel);
@@ -2324,13 +2485,16 @@ var
         if JP<>nil then
         begin
           n:=JP.Length;
-          mstr:=BIOS_ParamHeader+IntToStr(n-1);
+          {mstr:=JEP_ParamHeader+IntToStr(n-1);
           J:=JSONObject(JP.Remove(mstr));
-          JN.Put(BIOS_Param1,J);
+          JN.Put(JEP_Param1,J);}
+          //在含有前缀的情况下，最后一个Key不是 P + (n-1)  2011-09-20
+          mstr:=JP.KeyByIndex[n-1];
+          JN.Put(JEP_Param1,JP.Remove(mstr));
           JP.Put(mstr,JN);
         end
         else
-          JN.Put(BIOS_Param1,J);
+          JN.Put(JEP_Param1,J);
         JObjs[JLevel]:=JN;
         if Func='' then
           LevelOpCh[JLevel]:=OpCh_None
@@ -2342,7 +2506,7 @@ var
       end
       else
         with J do
-          Put(BIOS_ParamHeader+IntToStr(Length),JObjs[JLevel+1]);
+          Put(JEP_ParamHeader+IntToStr(Length),JObjs[JLevel+1]);
       LevelBC[JLevel+1]:=BlockCnt;
       Inc(JLevel);
       if Func='' then
@@ -2353,14 +2517,14 @@ var
         LevelOpCh[JLevel]:=OpCh_Func;
     end;
   end;
-  function NextCh(CurPos, EndPos: Integer; const Str: String):Char; inline;
+  function NextCh(CurPos: Integer):Char; //automatic inline
   begin
     if CurPos>=EndPos then
       Result:=#0
     else
-      Result:=Str[CurPos+1];
+      Result:=SubString[CurPos+1];
   end;
-  function NextOps(CurPos, EndPos: Integer; const Str: String):String; inline;
+  function NextOps(CurPos: Integer):String; //automatic inline
   var
     j:Integer;
   begin
@@ -2368,13 +2532,45 @@ var
     j:=CurPos+1;
     while j<=EndPos do
     begin
-      if not (Str[j] in MathOp4+CompOp2+[':']) then exit;
-      Result:=Result+Str[j];
+      if not (SubString[j] in MathOp4+CompOp2+[':']) then exit;
+      Result:=Result+SubString[j];
       Inc(j);
     end;
   end;
+  function IsPerfix(CurPos: Integer):Boolean;
+  var
+    j:Integer;
+  begin
+    j:=CurPos;
+    while j<=EndPos do
+    begin
+      if not (SubString[j] in ([#1..' ','.']+VarBegin+VarBody)) then
+      begin
+        Result:=SubString[j] in [':','(','=',';'];
+        exit;
+      end;
+      Inc(j);
+    end;
+    Result:=true;
+  end;
+  function IsSentenceEnd(CurPos: Integer):Boolean;
+  var
+    j:Integer;
+  begin
+    j:=CurPos;
+    while j<=EndPos do
+    begin
+      if not (SubString[j] in ([#1..' '])) then
+      begin
+        Result:=SubString[j] in [';'];
+        exit;
+      end;
+      Inc(j);
+    end;
+    Result:=true;
+  end;
 var
-  i,s,e: Integer;
+  i,s: Integer;
   FuncName: String;
   ExprStart: Boolean;
   StrValue: string;
@@ -2389,8 +2585,8 @@ begin
     s:=1;
   if PEnd<>nil then
   begin
-    e:=PEnd^;
-    SubString:=Copy(Expr,s,s-e+1);
+    EndPos:=PEnd^;
+    SubString:=Copy(Expr,s,s-EndPos+1);
   end
   else if S<=1 then
     SubString:=Expr
@@ -2404,14 +2600,14 @@ begin
     exit;
   end;
   JLevel:=0;
-  AddOp('',amNone);
+  InitLevel;//AddOp('',amNone);
   LevelBC[0]:=0;
   BlockCnt:=0;
   FuncName:='';
   ExprStart:=true;
-  e:=Length(SubString);
+  EndPos:=Length(SubString);
   i:=1;
-  while i<=e do
+  while i<=EndPos do
   begin
     Ch:=SubString[I];
     if Ch<=' ' then
@@ -2427,7 +2623,7 @@ begin
         Inc(I);
       until not (SubString[I] in Digits+['.']);
       //Scientific Number. eg:  1.34E-20  9E55
-      if (i<e) and (SubString[I] in ['e','E']) then
+      if (i<EndPos) and (SubString[I] in ['e','E']) then
       begin
         StrValue:=StrValue + SubString[I];
         Inc(I);
@@ -2436,7 +2632,7 @@ begin
           StrValue:=StrValue + SubString[i];
           Inc(i);
         end;
-        if i<=e then
+        if i<=EndPos then
           repeat
             StrValue:=StrValue + SubString[i];
             Inc(I);
@@ -2489,7 +2685,12 @@ begin
         if not WriteVar(StrValue) then  //将第二个 "变量" 当成操作符
         begin
           if JLevel>=High(JObjs) then break;  //强制跳出
-          AddOp(FuncName,amOperator,true);
+          if IsPerfix(i) then  // "public function Foo()"  OR  "out R : Int"  OR  "const A = 100"
+          begin
+            WritePerfix(StrValue,(i>EndPos) or IsSentenceEnd(i));
+          end  
+          else  //  A Like B
+            AddOp(FuncName,amOperator,true);
         end;
         FuncName:='';
       end;
@@ -2501,7 +2702,7 @@ begin
       begin
         StrValue:=Ch;
         Inc(I);
-        while i<=e do  //2011-09-03  Allow op like:  +=  %>  -*  =<>  ::=  -:>>  |=  :<=  ...
+        while i<=EndPos do  //2011-09-03  Allow op like:  +=  %>  -*  =<>  ::=  -:>>  |=  :<=  ...
         begin
           Ch:=SubString[I];
           if not (Ch in MathOp3+CompOp2+[':','!']) then break;
@@ -2519,13 +2720,13 @@ begin
         end;
       end
       else begin //  '/'  2010-08-10
-        if (i<e) and (SubString[i+1] in CompOp2) then  //  Allow  /=  />  /<
+        if (i<EndPos) and (SubString[i+1] in CompOp2) then  //  Allow  /=  />  /<
         begin
           StrValue:=SubString[i]+SubString[i+1];
           Inc(i,2);
         end
         else begin
-          while i<=e do
+          while i<=EndPos do
           begin
             if SubString[I]<>'/' then break;
             StrValue:=StrValue+'/';
@@ -2533,7 +2734,7 @@ begin
           end;
           if Length(StrValue)>=2 then  //  '//' or more...
           begin
-            while i<=e do
+            while i<=EndPos do
             begin
               if SubString[I] in [#13,#10] then break;
               Inc(i);
@@ -2553,7 +2754,7 @@ begin
           JLevel:=FuncLevel;
           if LevelOpCh[JLevel]=OpCh_None then  //逗号
           begin
-            JSONObject(JObjs[JLevel]).Put(BIOS_Operator,'(');
+            JSONObject(JObjs[JLevel]).Put(JEP_Operator,'(');
             LevelOpCh[JLevel]:='(';
             Dec(LevelBC[JLevel]);
           end
@@ -2568,10 +2769,10 @@ begin
           if LevelBC[JLevel]<BlockCnt then
             with JSONObject(JObjs[JLevel]) do
             begin
-              StrValue:=OptString(BIOS_Operator);
+              StrValue:=OptString(JEP_Operator);
               if StrValue='' then
               begin
-                Put(BIOS_Operator,'(');  //括号做为集合标志
+                Put(JEP_Operator,'(');  //括号做为集合标志
               end
               else if StrValue='[' then  //Array  ... ? [ a, b]  or  ... A[1,2]
               begin
@@ -2641,12 +2842,12 @@ begin
         '''':
         begin
           Inc(i);
-          while i<=e do
+          while i<=EndPos do
           begin
             if SubString[i]='''' then
             begin
               Inc(i);
-              if (i<=e) and (SubString[i]='''') then
+              if (i<=EndPos) and (SubString[i]='''') then
               begin
                 StrValue:=StrValue+'''';
                 Inc(i);
@@ -2666,12 +2867,12 @@ begin
         begin
           ExprStart:=false;
           Inc(i);
-          while i<=e do
+          while i<=EndPos do
           begin
             if SubString[i]='"' then
             begin
               Inc(i);
-              if (i<=e) and (SubString[i]='"') then
+              if (i<=EndPos) and (SubString[i]='"') then
               begin
                 StrValue:=StrValue+'"';
                 Inc(i);
@@ -2736,7 +2937,7 @@ begin
         end;
         '{':  //Embed JSONObject
         begin
-          while i<=Length(SubString) do
+          while i<=EndPos do
           begin
             StrValue:=StrValue+SubString[i];
             if SubString[i]='}' then
@@ -2806,7 +3007,7 @@ var
       Result:=Z.toString;
       if (Result<>'') and (Z.ClassType=_String) then
       begin
-        if Result[1]=BIOS_StrParamHeader then  //String
+        if Result[1]=JEP_StrParamHeader then  //String
           Result:=QuotedStr(Copy(Result,2,MaxInt))
         else begin //Var Name
           if UseVarHelperOnTextGen and (VarHelper<>nil) and VarHelper.GetVar(Result,v) then
@@ -2823,10 +3024,11 @@ var
   i:Integer;
   C1:Char;
   BodyStr:String;
+  Z:TZAbstractObject;
 begin
   Result:='';
   if AObj=nil then exit;
-  Func:=AObj.OptString(BIOS_Operator);
+  Func:=AObj.OptString(JEP_Operator);
 {$IFNDEF NO_OPTRANSLATE}
   if OpHelper<>nil then  //2011-09-04
     Func:=OpHelper.RestoreOperator(Func,AObj);
@@ -2840,12 +3042,41 @@ begin
     OpRk:=-1
   else
     OpRk:=OpRank[C1];
-  Result:=J2Str(AObj.Opt(BIOS_Param1));
-  if Func='' then exit;
+  //Perfix expression like 'public final function Foo(A,B)'
+  if C1=' ' then
+  begin
+    Z:=AObj.Opt(JEP_Perfix);
+    if Z is JSONArray then
+    begin
+      with JSONArray(Z) do
+      begin
+        for i:=0 to Pred(length) do
+          Result:=Result+getString(i)+' ';
+      end;
+    end;
+    Result:=Result+Copy(Func,2,MaxInt)+' ';  //去掉空格
+    with AObj do
+      Z:=ValObjByIndex[length-1];
+    if not (Z is JSONArray) then
+    begin
+      Result:=Result+J2Str(Z);
+    end;
+    exit;
+  end;
+  Z:=AObj.Opt(JEP_Param1);
+  Result:=J2Str(Z);
+  if Func='' then
+  begin
+    if (Z is JSONObject) then  //处理括号
+      Result:='('+Result+')';
+    exit;
+  end;
   if (C1 in MathOp2+CompOp2+['.']+MathOp1) or (Func='AND') or (Func='OR') or (Func='IN') or (Func='IS') or (Func='XOR') then
   begin
     if C1 in MathOp2+CompOp2+['.'] then
-      Result:=Result+Func
+    begin
+      Result:=Result+Func;
+    end
     else if C1 in MathOp1 then
     begin
       Result:=Func+Result;
@@ -2855,19 +3086,25 @@ begin
     end
     else
       Result:=Result+' '+Func+' ';
-    BodyStr:=J2Str(AObj.Opt(BIOS_ParamHeader+'2'));
-    if Func=BIOS_BodyDefOp then
+    Z:=AObj.Opt(JEP_ParamHeader+'2');
+    BodyStr:=J2Str(Z);
+    if Func=JEP_BodyDefOp then
     begin
-      if (BodyStr='') or not ((BodyStr[1]='(') and (BodyStr[Length(BodyStr)]=')'))then
+      if Z=nil then
+        Result:=Result+'()'
+      else if (Z is JSONObject) and (JSONObject(Z).OptString(JEP_Operator)=';') then
+      begin
         Result:=Result+'('+BodyStr+')'
+      end
       else
         Result:=Result+BodyStr;
       exit;
     end;
     Result:=Result+BodyStr;
     if C1=OpCh_Sentence then  //支持多个平行语句  2010-06-28
-      for i:=3 to AObj.Length-1 do
-        Result:=Result+Func+J2Str(AObj.Opt(BIOS_ParamHeader+IntToStr(i)));
+      with AObj do
+        for i:=3 to Length-1 do
+          Result:=Result+Func+J2Str(Opt(JEP_ParamHeader+IntToStr(i)));
     if (ParentOpRank<0) or (OpRk<ParentOpRank) then
       Result:='('+Result+')';
   end
@@ -2875,17 +3112,19 @@ begin
     if C1='[' then   // A[1]  =>  [,A,1
     begin
       Result:=Result+'[';
-      for i:=2 to Pred(AObj.Length) do
-      begin
-        if i>2 then Result:=Result+',';
-        Result:=Result+J2Str(AObj.Opt(BIOS_ParamHeader+IntToStr(i)));
-      end;
+      with AObj do
+        for i:=2 to Pred(Length) do
+        begin
+          if i>2 then Result:=Result+',';
+          Result:=Result+J2Str(Opt(JEP_ParamHeader+IntToStr(i)));
+        end;
       Result:=Result+']';
       exit;
     end
     else begin
-      for i:=2 to Pred(AObj.Length) do
-        Result:=Result+','+J2Str(AObj.Opt(BIOS_ParamHeader+IntToStr(i)));
+      with AObj do
+        for i:=2 to Pred(Length) do
+          Result:=Result+','+J2Str(Opt(JEP_ParamHeader+IntToStr(i)));
     end;
     Result:='('+Result+')';
     if Func<>'(' then  //集合以 "(" 做为操作符
@@ -2924,7 +3163,7 @@ var
       Result:=Z.toString;
       if (Result<>'') and (Z.ClassType=_String) then
       begin
-        if Result[1]=BIOS_StrParamHeader then  //String
+        if Result[1]=JEP_StrParamHeader then  //String
           Result:=QuotedStr(Copy(Result,2,MaxInt))
         else begin //Var Name
           if (VarHelper<>nil) and VarHelper.GetVar(Result,v) then
@@ -2940,13 +3179,13 @@ var
 begin
   Result:='';
   if AObj=nil then exit;
-  Func:=AObj.OptString(BIOS_Operator);
+  Func:=AObj.OptString(JEP_Operator);
   IsCommonFunc:=(Func='') or not ((Func[1] in MathOp2+CompOp2+['.']+MathOp1) or (Func='AND') or (Func='OR') or (Func='IN') or (Func='IS') or (Func='XOR'));
   if IsCommonFunc or (ParentOpRank<0) then
     OpRk:=-1
   else
     OpRk:=OpRank[Func[1]];
-  Result:=J2Str(AObj.Opt(BIOS_Param1));
+  Result:=J2Str(AObj.Opt(JEP_Param1));
   if Func='' then exit;
   if (Func[1] in MathOp2+CompOp2+['.']+MathOp1) or (Func='AND') or (Func='OR') or (Func='IN') or (Func='IS') or (Func='XOR') then
   begin
@@ -2961,13 +3200,13 @@ begin
     end
     else
       Result:=Result+' '+Func+' ';
-    Result:=Result+J2Str(AObj.Opt(BIOS_ParamHeader+'2'));
+    Result:=Result+J2Str(AObj.Opt(JEP_ParamHeader+'2'));
     if (ParentOpRank<0) or (OpRk<ParentOpRank) then
       Result:='('+Result+')';
   end
   else begin
     for i:=2 to Pred(AObj.Length) do
-      Result:=Result+','+J2Str(AObj.Opt(BIOS_ParamHeader+IntToStr(i)));
+      Result:=Result+','+J2Str(AObj.Opt(JEP_ParamHeader+IntToStr(i)));
     if Func[1]='[' then
     begin
       Result:='['+Result+']';
@@ -3097,7 +3336,7 @@ class function TJSONExprParser.VarNeeded(AObj: JSONObject; var Vars: TStrings):I
     if Z.ClassType=_String then
     begin
       mstr:=_String(Z).toString;
-      if (mstr<>'') and (mstr[1]<>BIOS_StrParamHeader) then  //变量名
+      if (mstr<>'') and (mstr[1]<>JEP_StrParamHeader) then  //变量名
       begin
         Inc(Result);
         if Vars=nil then
@@ -3139,7 +3378,7 @@ end;
 
 class function TJSONExprParser.Version: ShortString;
 begin
-  Result:='0.3.4';
+  Result:='0.4.0';
 end;
 
 { TJEVarHelper }

@@ -36,7 +36,7 @@ begin
     mstr:='('+LineData.toString+')';
   end
   else begin
-    mstr:=JSONObject(LineData).OptString(BIOS_Operator);
+    mstr:=JSONObject(LineData).OptString(JEP_Operator);
     if mstr=';' then exit;
     mstr:='"'+mstr+'"';
   end;
@@ -320,6 +320,18 @@ begin
       Msg:=Msg+#13#10+mstr+' => '+JSONToExpr(J,0);
     end;
     J.Free;
+    mstr:='PUBLIC VIRTUAL FUNCTION ADD2(A,B):=(A+B)';
+    J:=ExprToJSON(mstr);
+    with J do
+    begin
+      s1:=JSONToExpr(J);
+      if s1<>mstr then
+      begin
+        Result:=false;
+        Msg:=Msg+#13#10+mstr+' => '+s1;
+      end;
+      Free;
+    end;
     Free;
   end;
   //Eval Test
