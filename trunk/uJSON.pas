@@ -41,6 +41,9 @@ uses
   Windows,SysUtils, Classes,  TypInfo;
 
 {$DEFINE J_OBJECT}  // store common Object
+{$IF COMPILERVERSION>=18}{$DEFINE INLINE_OPT}{$IFEND}
+{$DEFINE BACK_OPT}
+
 
 Type
   TZAbstractObject = class
@@ -75,24 +78,24 @@ Type
   JSONTokener = class  (TZAbstractObject)
   public
     constructor create (const s: string);
-    procedure back();
+    procedure back();{$IFDEF INLINE_OPT}inline;{$ENDIF}
     class function dehexchar(c: char) :integer;
-    function more :boolean;{$IF COMPILERVERSION>=18}inline;{$IFEND}
-    function next(): char; overload ;{$IF COMPILERVERSION>=18}inline;{$IFEND}
-    function next (c:char ): char; overload ;{$IF COMPILERVERSION>=18}inline;{$IFEND}
-    function next (n:integer): string; overload ;
-    function nextClean (): char;
-    function nextString (quote: char): string;
+    function more :boolean;{$IFDEF INLINE_OPT}inline;{$ENDIF}
+    function next(): char; overload ;{$IFDEF INLINE_OPT}inline;{$ENDIF}
+    function next (c:char ): char; overload ;{$IFDEF INLINE_OPT}inline;{$ENDIF}
+    function next (n:integer): string; overload ;{$IFDEF INLINE_OPT}inline;{$ENDIF}
+    function nextClean (): char;//{$IFDEF INLINE_OPT}inline;{$ENDIF}
+    function nextString (quote: char): string;//{$IFDEF INLINE_OPT}inline;{$ENDIF}
     function nextTo (d: char): string;  overload ;
     function nextTo (const delimiters: string): char;   overload ;
-    function nextValue (): TZAbstractObject ;
+    function nextValue (): TZAbstractObject ;//{$IFDEF INLINE_OPT}inline;{$ENDIF}
     procedure skipPast (const _to: string ) ;
     function skipTo (_to: char ): char;
     function syntaxError (const _message: string): ParseException;
     function toString: string;  override;
     function unescape (const s: string): string;
   private
-    myIndex: integer;
+    myIndex, Len1: integer;
     mySource: string;
   end;
 
@@ -427,7 +430,6 @@ end;
 function HexToInt(S: String): Integer;
 var
   I, E, F, G: Integer;
-
   function DigitValue(C: Char): Integer;
   begin
     case C of
@@ -441,7 +443,6 @@ var
       Result:=StrToInt(C);
     end;
   end;
-
 begin
   S:=UpperCase(S);
   if S[1] = '$' then Delete(S, 1, 1);
@@ -454,8 +455,6 @@ begin
   end;
 end;
 
-
-
 { JSONTokener }
 
 (**
@@ -465,10 +464,10 @@ end;
      *)
 constructor JSONTokener.create(const s: string);
 begin
-  self.myIndex:=1;
-  self.mySource:=s;
+  myIndex:=1;
+  mySource:=s;
+  Len1:=Length(mySource)+1;
 end;
-
 
 (**
      * Back up one character. This provides a sort of lookahead capability,
@@ -477,11 +476,8 @@ end;
 *)
 procedure JSONTokener.back;
 begin
-  if (self.myIndex > 1) then begin
-            self.myIndex:=self.myIndex - 1;
-  end;
+  if myIndex>1 then Dec(myIndex);
 end;
-
 
 (**
      * Get the hex value of a character (base16).
@@ -514,18 +510,18 @@ end;
 *)
 function JSONTokener.more: boolean;
 begin
-  Result:=self.myIndex <= System.length(self.mySource)+1;
+  Result:=myIndex<=Len1{System.length(mySource)+1};
 end;
 
 function JSONTokener.next: char;
 begin
-  if (more()) then
+  if {$IFDEF BACK_OPT}myIndex<=Len1{$ELSE}more(){$ENDIF} then
   begin
-    Result:=self.mySource[self.myIndex];
-    self.myIndex:=self.myIndex + 1;
-    exit;
-  end;
-  Result:=chr(0);
+    Result:=mySource[myIndex];
+    Inc(myIndex);
+  end
+  else
+    Result:=chr(0);
 end;
 
 
@@ -540,10 +536,7 @@ function JSONTokener.next(c: char): char;
 begin
   Result:=next();
   if (Result <> c) then
-  begin
-    raise syntaxError('Expected ' + c + ' and instead saw ' +
-      Result + '.');
-  end;
+    raise syntaxError('Expected ' + c + ' and instead saw ' + Result + '.');
 end;
 
 
@@ -578,18 +571,20 @@ end;
 function JSONTokener.nextClean: char;
 var
   c: char;
-
 begin
-  while (true) do begin
+  while (true) do
+  begin
     c:=next();
-    if (c = '/') then begin
+    if (c = '/') then
+    begin
       case (next()) of
       '/': begin
         repeat
           c:=next();
         until (not ((c <> #10) and (c <> #13) and (c <> #0)));
       end ;
-      '*': begin
+      '*':
+      begin
         while (true) do
         begin
           c:=next();
@@ -603,21 +598,25 @@ begin
             begin
               break;
             end;
-            back();
+            {$IFDEF BACK_OPT}if myIndex>1 then Dec(myIndex);{$ELSE}back();{$ENDIF}
           end;
         end;
       end
       else begin
-        back();
+        {$IFDEF BACK_OPT}if myIndex>1 then Dec(myIndex);{$ELSE}back();{$ENDIF}
         Result:='/';
         exit;
       end;
     end;
-    end else if (c = '#') then begin
+    end
+    else if (c = '#') then
+    begin
       repeat
         c:=next();
       until (not ((c <> #10) and (c <> #13) and (c <> #0)));
-    end else if ((c = #0) or (c > ' ')) then begin
+    end
+    else if ((c = #0) or (c > ' ')) then
+    begin
       Result:=c;
       exit;
     end;
@@ -719,7 +718,7 @@ begin
     begin
       if (c <> #0) then
       begin
-        back();
+        {$IFDEF BACK_OPT}if myIndex>1 then Dec(myIndex);{$ELSE}back();{$ENDIF}
       end;
       Result:=trim (sb);
       exit;
@@ -750,7 +749,7 @@ begin
     begin
       if (c <> #0) then
       begin
-        back();
+        {$IFDEF BACK_OPT}if myIndex>1 then Dec(myIndex);{$ELSE}back();{$ENDIF}
       end;
       sb:=trim(sb);
       if (System.length(sb) > 0) then
@@ -782,12 +781,12 @@ begin
         exit;
     end;
     '{': begin
-        back();
+        {$IFDEF BACK_OPT}if myIndex>1 then Dec(myIndex);{$ELSE}back();{$ENDIF}
         Result:=JSONObject.create(self);
         exit;
     end;
     '[': begin
-        back();
+        {$IFDEF BACK_OPT}if myIndex>1 then Dec(myIndex);{$ELSE}back();{$ENDIF}
         Result:=JSONArray.create(self);
         exit;
     end;
@@ -808,7 +807,7 @@ begin
       sb:=sb + c;
       c:=next();
   end;
-  back();
+  {$IFDEF BACK_OPT}if myIndex>1 then Dec(myIndex);{$ELSE}back();{$ENDIF}
 
   (*
    * If it is true, false, or null, return the proper value.
@@ -913,14 +912,15 @@ var
 begin
   index:=self.myIndex;
   repeat
-      c:=next();
-      if (c = #0) then begin
-          self.myIndex:=index;
-          Result:=c;
-          exit;
-     end;
-  until (not (c <> _to));
-  back();
+    c:=next();
+    if (c = #0) then
+    begin
+      self.myIndex:=index;
+      Result:=c;
+      exit;
+    end;
+  until c=_to;
+  {$IFDEF BACK_OPT}if myIndex>1 then Dec(myIndex);{$ELSE}back();{$ENDIF}
   Result:=c;
   exit;
 end;
@@ -962,7 +962,7 @@ end;
      *)
 function JSONTokener.toString: string;
 begin
-  Result:=' at character ' + intToStr(self.myIndex) + ' of ' + self.mySource;
+  Result:=' at character ' + intToStr(myIndex) + ' of ' + mySource;
 end;
 
 
@@ -983,22 +983,25 @@ begin
   len:=System.length(s);
   b:='';
   i:=1;
-        while ( i <= len ) do begin
-            c:=s[i];
-            if (c = '+') then begin
-                c:=' ';
-            end else if ((c = '%') and ((i + 2) <= len)) then begin
-                d:=dehexchar(s[i + 1]);
-                e:=dehexchar(s[i + 2]);
-                if ((d >= 0) and (e >= 0)) then begin
-                    c:=chr(d * 16 + e);
-                    i:=i + 2;
-                end;
-            end;
-            b:=b + c;
-            i:=i + 1;
-        end;
-        Result:=b ;
+  while ( i <= len ) do begin
+    c:=s[i];
+    if (c = '+') then begin
+      c:=' ';
+    end
+    else if ((c = '%') and ((i + 2) <= len)) then
+    begin
+      d:=dehexchar(s[i + 1]);
+      e:=dehexchar(s[i + 2]);
+      if ((d >= 0) and (e >= 0)) then
+      begin
+        c:=chr(d * 16 + e);
+        i:=i + 2;
+      end;
+    end;
+    b:=b + c;
+    i:=i + 1;
+  end;
+  Result:=b ;
 end;
 
 { JSONObject }
@@ -1073,7 +1076,7 @@ begin
     create();
     exit;
   end;
-  token:= JSONTokener.create(s);
+  token:=JSONTokener.create(s);
   try
     create(token);
   finally
@@ -1338,13 +1341,12 @@ end;
 
 class function JSONObject.numberToString(n: _Number): string;
 begin
-   if (n = nil) then begin
-     Result:='';
-   end else if (n is _Integer) then begin
+   if (n = nil) then
+     Result:=''
+   else if (n is _Integer) then
      Result:=IntToStr(n.intValue)
-   end else begin
+   else
      Result:=FloatToStr (n.doubleValue, getFormatSettings());
-   end; 
 end;
 
 
@@ -1358,15 +1360,11 @@ function JSONObject.opt(const key: string): TZAbstractObject;
 var
   i:Integer;
 begin
-  {if (key = '') then
-    raise NullPointerException.create('Null key')
-  else begin}
-    i:=myHashMap.IndexOf(key);
-    if i<0 then
-      Result:=nil
-    else
-      Result:=TZAbstractObject(myHashMap.Objects[i]);
-  //end;
+  i:=myHashMap.IndexOf(key);
+  if i<0 then
+    Result:=nil
+  else
+    Result:=TZAbstractObject(myHashMap.Objects[i]);
 end;
 
 function JSONObject.Opt2(key, key2: string): TZAbstractObject;
@@ -2444,9 +2442,8 @@ var
 begin
   key:='';
 
-  if (x.nextClean() <> '{') then begin
-      raise x.syntaxError('A JSONObject must begin with "{"');
-  end;
+  if (x.nextClean() <> '{') then
+    raise x.syntaxError('A JSONObject must begin with "{"');
   while (true) do
   begin
     c:=x.nextClean();
@@ -2457,7 +2454,7 @@ begin
         exit;
     end
     else begin
-        x.back();
+        {$IFDEF BACK_OPT}if x.myIndex>1 then Dec(x.myIndex);{$ELSE}x.back();{$ENDIF}
         //key:=x.nextValue().toString();
         with x.nextValue() do
         begin
@@ -2474,7 +2471,7 @@ begin
     c:=x.nextClean();
     if (c = '=') then begin
         if (x.next() <> '>') then begin
-            x.back();
+            {$IFDEF BACK_OPT}if x.myIndex>1 then Dec(x.myIndex);{$ELSE}x.back();{$ENDIF}
         end;
     end else if (c <> ':') then begin
         raise x.syntaxError('Expected a ":" after a key');
@@ -2490,7 +2487,7 @@ begin
         if (x.nextClean() = '}') then begin
             exit;
         end;
-        x.back();
+        {$IFDEF BACK_OPT}if x.myIndex>1 then Dec(x.myIndex);{$ELSE}x.back();{$ENDIF}
     end;
     '}': begin
         exit;
@@ -2708,34 +2705,29 @@ end;
 constructor JSONArray.create(x: JSONTokener);
 begin
   create;
-  if (x.nextClean() <> '[') then begin
-      raise x.syntaxError('A JSONArray must start with "["');
-  end;
-  if (x.nextClean() = ']') then begin
-      exit;
-  end;
-  x.back();
-  while (true) do begin
-      if (x.nextClean() = ',') then begin
-          x.back();
-          myArrayList.add(nil);
-      end else begin
-          x.back();
-          myArrayList.add(x.nextValue());
+  if (x.nextClean() <> '[') then
+    raise x.syntaxError('A JSONArray must start with "["');
+  //if (x.nextClean() = ']') then exit;
+  //{$IFDEF BACK_OPT}if x.myIndex>1 then Dec(x.myIndex);{$ELSE}x.back();{$ENDIF}
+  while true do
+  begin
+    if (x.nextClean() = ',') then begin
+        {$IFDEF BACK_OPT}if x.myIndex>1 then Dec(x.myIndex);{$ELSE}x.back();{$ENDIF}
+        myArrayList.add(nil);
+    end
+    else begin
+        {$IFDEF BACK_OPT}if x.myIndex>1 then Dec(x.myIndex);{$ELSE}x.back();{$ENDIF}
+        myArrayList.add(x.nextValue());
+    end;
+    case x.nextClean() of
+      ';',',':
+      begin
+        if (x.nextClean() = ']') then exit;
+        {$IFDEF BACK_OPT}if x.myIndex>1 then Dec(x.myIndex);{$ELSE}x.back();{$ENDIF}
       end;
-      case (x.nextClean()) of
-      ';',',': begin
-          if (x.nextClean() = ']') then begin
-              exit;
-          end;
-          x.back();
-      end;
-      ']': begin
-          exit;
-      end else begin
-         raise x.syntaxError('Expected a "," or "]"');
-      end
-      end;
+      ']': exit;
+      else raise x.syntaxError('Expected a "," or "]"');
+    end;
   end;
 end;
 
