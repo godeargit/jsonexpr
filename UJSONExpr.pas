@@ -120,6 +120,13 @@ var 0.4.0  By creation_zy  (无尽愿)
       const PI:=3.14159;
       abstract class TPlane(Object);
   Add function "IsArray"
+
+2011-09-23
+var 0.4.1  By creation_zy  (无尽愿)
+  Add "IFELSE" and "CASE" statement:
+    ifelse(A=B,F1(),A>B,F2(),F3())
+    case(A,B,F1(),C,F2(),D,F3(),E)
+  Support ++ and -- operator like:  A++  B--
 }
 
 unit UJSONExpr;
@@ -390,6 +397,10 @@ implementation
 type
   TVarAy=array of Variant;
   TOpChar=Char;
+  TBreakException=class(Exception) end;
+  TBreak2Exception=class(Exception) end;
+  TExitException=class(Exception) end;
+
 var
   OpRank:array [TOpChar] of Byte;  //操作符优先级表（根据操作符的首字母来确定）
 threadvar
@@ -1136,7 +1147,12 @@ begin
     Func:=Z.toString;
   if Func='' then  //如果操作符为空，就用第一个参数的值
   begin
-    Result:=GetP1;
+    if ParamCnt>1 then  //无操作符，但有多个参数，说明是集合  (A,B,...)  2011-09-22
+    begin
+      Result:=Func_Collection;
+    end
+    else
+      Result:=GetP1;
     exit;
   end;
   Func1:=Func[1];
@@ -1302,6 +1318,15 @@ begin
             '|': Result:=Integer(v1) or Integer(v2);
             else Done:=false;
           end;
+          SetValue(Result);
+        end
+        else if (Func1 in ['+','-']) and (Func[2]=Func1) then  //2011-09-23  ++  --
+        begin
+          v1:=GetP1;
+          if Func1='+' then
+            Result:=v1+1
+          else
+            Result:=v1-1;
           SetValue(Result);
         end
         else if Func1 in CompOp2 then
@@ -1508,6 +1533,26 @@ begin
             end
             else
               Done:=false;
+          'C':
+            if Func='CASE' then  //2011-09-22
+            begin
+              v1:=GetP1;
+              i:=2;
+              while i<ParamCnt do
+              begin
+                if VarEqual(v1,GetPN(i)) then
+                begin
+                  Result:=GetPN(i+1);
+                  break;
+                end;
+                Inc(i,2);
+              end;
+              //最后一个ELSE
+              if (i=ParamCnt) and VarIsNull(Result) then
+                Result:=GetPN(i);
+            end
+            else
+              Done:=false;
           'D':
             if Func='DATE' then  //2011-09-01
             begin
@@ -1519,6 +1564,10 @@ begin
             if Func=JEP_Eval then  //2011-09-03
             begin
               Result:=DoEval(GetP1);
+            end
+            else if Func='EXIT' then  //2011-09-03
+            begin
+              raise TExitException.Create('');
             end
             else
               Done:=false;
@@ -1547,7 +1596,7 @@ begin
           'B':
             if Func='BREAK' then
             begin
-              Abort;  //产生哑异常，跳出循环结构
+              raise TBreakException.Create(''); // Abort;  //产生哑异常，跳出循环结构
             end
             else
               Done:=false;
@@ -1618,6 +1667,31 @@ begin
               Result:=GetP1;
               if VarIsNull(Result) then
                 Result:=GetP2;
+            end
+            else if Func='IFELSE' then  //2011-09-22
+            begin
+              v1:=GetP1;
+              if VarType(v1)=varBoolean then
+                if Boolean(v1) then
+                  Result:=GetP2
+                else if ParamCnt>2 then
+                begin
+                  i:=3;
+                  while i<ParamCnt do
+                  begin
+                    v1:=GetPN(i);
+                    if VarType(v1)=varBoolean then
+                      if Boolean(v1) then
+                      begin
+                        Result:=GetPN(i+1);
+                        break;
+                      end;
+                    Inc(i,2);
+                  end;
+                  //最后一个ELSE
+                  if (i=ParamCnt) and VarIsNull(Result) then
+                    Result:=GetPN(i);
+                end;
             end
             else
               Done:=false;
@@ -1736,7 +1810,16 @@ begin
         end;
       end;
   except
-    Result:=Null;
+    on e:TExitException do
+    begin
+      raise TExitException.Create(e.Message);
+    end;
+    on e:TBreakException do
+    begin
+      raise TBreakException.Create(e.Message);
+    end;
+    on e:Exception do
+      Result:=Null;
   end;
 end;
 
@@ -2570,7 +2653,7 @@ var
     Result:=true;
   end;
 var
-  i,s: Integer;
+  i,s,OriLv: Integer;
   FuncName: String;
   ExprStart: Boolean;
   StrValue: string;
@@ -2666,7 +2749,7 @@ begin
         AddOp(FuncName,amOperator,true);
         FuncName:='';
       end
-      else if NextIsBlockBegin(I) or (FuncName='NOT') then
+      else if NextIsBlockBegin(I) or (FuncName='NOT') or (FuncName='BREAK') or (FuncName='EXIT') then
       begin
         if not NextIsBlockBegin(I) then
           AddOp(FuncName,amFunc)
@@ -2751,6 +2834,7 @@ begin
       case Ch of
         ',':
         begin
+          OriLv:=JLevel;
           JLevel:=FuncLevel;
           if LevelOpCh[JLevel]=OpCh_None then  //逗号
           begin
@@ -2763,10 +2847,12 @@ begin
             AddOp('(',amOperator,true);
             Dec(LevelBC[JLevel]);
           end
-          else
-          //逗号位于括号内部，并且括号外的操作符不是一般函数（无论单目还是双目算子，右侧都不会有多个参数)
-          // -- 将括号内的内容做为集合处理
-          if LevelBC[JLevel]<BlockCnt then
+          else if LevelBC[JLevel]<BlockCnt then
+          begin
+            //逗号位于括号内部，并且括号外的操作符不是一般函数（无论单目还是双目算子，右侧都不会有多个参数)
+            // -- 将括号内的内容做为集合处理
+            JLevel:=OriLv;
+            JLevel:=ExprLevel;
             with JSONObject(JObjs[JLevel]) do
             begin
               StrValue:=OptString(JEP_Operator);
@@ -2774,19 +2860,10 @@ begin
               begin
                 Put(JEP_Operator,'(');  //括号做为集合标志
               end
-              else if StrValue='[' then  //Array  ... ? [ a, b]  or  ... A[1,2]
-              begin
-                //Inc(JLevel);
-                //Dec(LevelBC[JLevel]);
-              end
-              else if not (StrValue[1] in VarBegin+['(']) or (StrValue='IN') then
-              begin
-                Inc(JLevel);
-                if LevelOpCh[JLevel]<>'[' then
-                  AddOp('(',amOperator,true);
-                Dec(LevelBC[JLevel]);
-              end;
+              else
+                JLevel:=FuncLevel;
             end;
+          end;
           Inc(i);
           ExprStart:=true;
         end;
@@ -3087,7 +3164,15 @@ begin
     else
       Result:=Result+' '+Func+' ';
     Z:=AObj.Opt(JEP_ParamHeader+'2');
-    BodyStr:=J2Str(Z);
+    if OpRk>=0 then
+    begin
+      //当第二个语句与父节点优先级相同时，应当使用括号 -- 主动提高父节点优先级
+      Inc(OpRk);
+      BodyStr:=J2Str(Z);
+      Dec(OpRk);
+    end
+    else
+      BodyStr:=J2Str(Z);
     if Func=JEP_BodyDefOp then
     begin
       if Z=nil then
@@ -3378,7 +3463,7 @@ end;
 
 class function TJSONExprParser.Version: ShortString;
 begin
-  Result:='0.4.0';
+  Result:='0.4.1';
 end;
 
 { TJEVarHelper }

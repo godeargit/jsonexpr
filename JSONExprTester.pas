@@ -312,6 +312,30 @@ begin
       end;
       Free;
     end;
+    mstr:='A(1,(B,C))';  //参数中的集合  2011-09-23
+    J:=ExprToJSON(mstr);
+    if JSONToExpr(J,0)<>mstr then
+    begin
+      Result:=false;
+      Msg:=Msg+#13#10+mstr+' => '+JSONToExpr(J,0);
+    end;
+    J.Free;
+    mstr:='(A,B,C).FUNC1(D[1],E.F)';
+    J:=ExprToJSON(mstr);
+    if JSONToExpr(J,0)<>mstr then
+    begin
+      Result:=false;
+      Msg:=Msg+#13#10+mstr+' => '+JSONToExpr(J,0);
+    end;
+    J.Free;
+    mstr:='B-=(A++)';
+    J:=ExprToJSON(mstr);
+    if JSONToExpr(J,0)<>mstr then
+    begin
+      Result:=false;
+      Msg:=Msg+#13#10+mstr+' => '+JSONToExpr(J,0);
+    end;
+    J.Free;
     mstr:='A[1][2+3*4,B[5].C(6,D)]';
     J:=ExprToJSON(mstr);
     if JSONToExpr(J,0)<>mstr then
@@ -359,7 +383,7 @@ begin
     J.Free;
     mstr:='X+2 in (null,2<>3,2+3*1)';
     UseVarHelperOnParse:=true;
-    J:=ExprToJSON(mstr{,VHelper});
+    J:=ExprToJSON(mstr);
     v:=Eval(J);
     if not v then
     begin
@@ -367,8 +391,18 @@ begin
       Msg:=Msg+#13#10+(mstr+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
     end;
     J.Free;
+    mstr:='A:=3;B:=A++;B-=(A++);B--';
+    UseVarHelperOnParse:=false;
+    J:=ExprToJSON(mstr);
+    v:=Eval(J);
+    if v<>-2 then
+    begin
+      Result:=false;
+      Msg:=Msg+#13#10+(mstr+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
+    end;
+    J.Free;
     mstr:='(X=3) in (null,2<>3,2+3*1)';
-    J:=ExprToJSON(mstr{,VHelper});
+    J:=ExprToJSON(mstr);
     v:=Eval(J);
     if not v then
     begin
