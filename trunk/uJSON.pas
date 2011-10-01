@@ -43,6 +43,7 @@ uses
 {$DEFINE J_OBJECT}  // store common Object
 {$IF COMPILERVERSION>=18}{$DEFINE INLINE_OPT}{$IFEND}
 {$DEFINE BACK_OPT}
+{$DEFINE NEXT_OPT}
 
 
 Type
@@ -572,10 +573,22 @@ function JSONTokener.nextClean: char;
 var
   c: char;
 begin
-  while (true) do
+  while true do
   begin
-    c:=next();
-    if (c = '/') then
+  {$IFDEF NEXT_OPT2}
+    if myIndex<=Len1 then
+    begin
+      Result:=mySource[myIndex];
+      Inc(myIndex);
+    end
+    else begin
+      Result:=#0;
+      exit;
+    end;
+  {$ELSE}
+    Result:=next();
+  {$ENDIF}
+    if (Result = '/') then
     begin
       case (next()) of
       '/': begin
@@ -594,10 +607,7 @@ begin
           end;
           if (c = '*') then
           begin
-            if (next() = '/') then
-            begin
-              break;
-            end;
+            if (next() = '/') then break;
             {$IFDEF BACK_OPT}if myIndex>1 then Dec(myIndex);{$ELSE}back();{$ENDIF}
           end;
         end;
@@ -609,17 +619,14 @@ begin
       end;
     end;
     end
-    else if (c = '#') then
+    else if (Result = '#') then
     begin
       repeat
         c:=next();
       until (not ((c <> #10) and (c <> #13) and (c <> #0)));
     end
-    else if ((c = #0) or (c > ' ')) then
-    begin
-      Result:=c;
+    else if ((Result = #0) or (Result > ' ')) then
       exit;
-    end;
   end; //while
 end;
 
