@@ -114,7 +114,7 @@ ver 0.3.5  By creation_zy  (无尽愿)
   Support operator transfer like "==" -> "=".
 
 2011-09-20
-var 0.4.0  By creation_zy  (无尽愿)
+ver 0.4.0  By creation_zy  (无尽愿)
   Can parse define with perfix like:
       public function Add(A,B):=(A+B);
       const PI:=3.14159;
@@ -122,11 +122,17 @@ var 0.4.0  By creation_zy  (无尽愿)
   Add function "IsArray"
 
 2011-09-23
-var 0.4.1  By creation_zy  (无尽愿)
+ver 0.4.1  By creation_zy  (无尽愿)
   Add "IFELSE" and "CASE" statement:
     ifelse(A=B,F1(),A>B,F2(),F3())
     case(A,B,F1(),C,F2(),D,F3(),E)
   Support ++ and -- operator like:  A++  B--
+
+2011-10-01
+var 0.4.2  By creation_zy  (无尽愿)
+  Add "continue", "Reverse", "Pred", "Succ", "return".
+  Some bug fixed.
+  Some statement can convert to Pascal with TJETransPascal.
 }
 
 unit UJSONExpr;
@@ -147,6 +153,7 @@ uses
 //{$DEFINE NO_OPTRANSLATE}
 
 const
+  MaxJETreeLevel=256;
   varObject=varAny+$1000;
   JEP_Operator='op';
   JEP_Name='pn';
@@ -156,11 +163,54 @@ const
   JEP_ParamHeader='p';
   JEP_Param1='p1';
   JEP_Param2='p2';
+  JEP_Param3='p3';
   JEP_StrParamHeader='''';    //为了将字符串与变量名相区别，所有字符串值均带单引号前缀
   JEP_VarTag='"';             //支持由"包围的变量名，如 "No.1 Var", ":-)", "He ""!""" ——变量名不能以'开头
   JEP_BodyDefOp=':=';         //  Add(x,y):=(x+y);
   JEP_Class='class';          //  TFoo:Class(TObject)::=(Name:String; ID:Int);
-  JEP_Eval='EVAL';            //表达式求值
+  //Standart Functions
+  JEF_Between='BETWEEN';
+  JEF_Break='BREAK';
+  JEF_Case='CASE';
+  JEF_Continue='CONTINUE';
+  JEF_Dec='DEC';
+  JEF_Eval='EVAL';            //表达式求值
+  JEF_Exit='EXIT';
+  JEF_For='FOR';
+  JEF_If='IF';
+  JEF_Is='IS';
+  JEF_IfElse='IFELSE';
+  JEF_Inc='INC';
+  JEF_IsArray='ISARRAY';
+  JEF_IsNull='ISNULL';
+  JEF_Len='LEN';
+  JEF_Pred='PRED';
+  JEF_Print='PRINT';
+  JEF_Repeat='REPEAT';
+  JEF_Reverse='REVERSE';
+  JEF_Return='RETURN';
+  JEF_Succ='SUCC';
+  JEF_Times='TIMES';
+  JEF_Wait='WAIT';
+  JEF_While='WHILE';
+  //Std chars
+  VarBegin: set of Char=['a'..'z', 'A'..'Z', '_', '$', '@', #129..#254];  //允许$,@以及汉字
+  VarBody: set of Char=['a'..'z', 'A'..'Z', '_', '$', '@', '0'..'9', #129..#254];
+  MathOp1: set of Char=['!', '~'];  //单目运算符
+  MathOp2: set of Char=['+', '-', '*', '/', '\', '%', '^', '&', '|', '.', ':', ';', '?'];  //双目运算符
+  CompOp2: set of Char=['=', '>', '<'];  //比较运算符
+  MathOp3: set of Char=['+', '-', '*', '/', '\', '%', '^', '&', '|'];  //双目数学运算符
+  MathOp4: set of Char=['*', '/', '\', '%', '^', '&', '|'];  //非符号双目数学运算符
+  SetenceDiv: set of Char=[';'];
+  ValOps: set of Char=[
+    '!', '~',
+    '+', '-', '*', '/', '\', '%', '^', '&', '|', '.', ':', '?',
+    '=', '>', '<'];
+type
+  TOpChar=Char;
+const
+  OpCh_Sentence:TOpChar=';';
+  OpCh_Define:TOpChar=' ';   //2011-09-18
 type
   TParamIdxs=(pi1,pi2,pi3,pi4,pi5,pi6,pi7,pi8);
   TParamSet=set of TParamIdxs;
@@ -228,8 +278,6 @@ type
       如果ParentOpRank>0，会根据运算符优先级，返回尽量不带括号的结果
     }
     function JSONToExpr(AObj: JSONObject; ParentOpRank: Integer=-1):String;
-    function JSONToExpr2(AObj: JSONObject; const Ident: Integer=2;
-      ParentOpRank: Integer=-1):String;
     class function VarToExprStr(V: Variant):String;
     class function VarNeeded(AObj: JSONObject; var Vars: TStrings):Integer;
     class function Version:ShortString;
@@ -387,37 +435,32 @@ function VarToJSONObj(v: Variant):TZAbstractObject;
 function VarFromJSON(Z:TZAbstractObject):Variant;
 function Obj2Var(O: TObject): Variant; {$IF COMPILERVERSION>=18}inline;{$IFEND}
 function Var2Obj(V: Variant): TObject; {$IF COMPILERVERSION>=18}inline;{$IFEND}
+function IsNormalVarName(const Name: String):Boolean;
+function GetStdOpRank(FirstCh: Char; const Op: String):Byte;
 
 var
   DblQuotationAsString:Boolean=false;    //是否将双引号内的内容当成字符串
   UpperCaseNormalFuncName:Boolean=true;  //是否将一般的函数名转换成大写（引号内的函数名不做处理）
+  OpRank:array [TOpChar] of Byte;  //操作符优先级表（根据操作符的首字母来确定）
+  RK_Multi, RK_Add, RK_Shift, RK_Compare, RK_SetValue, RK_Block, RK_Sentence:Byte;
 
 implementation
 
 type
   TVarAy=array of Variant;
-  TOpChar=Char;
   TBreakException=class(Exception) end;
-  TBreak2Exception=class(Exception) end;
-  TExitException=class(Exception) end;
+  TContinueException=class(Exception) end;
+  TExitException=class(Exception)
+    ReturnVal: Variant;
+    constructor CreateVal(V: Variant);
+  end;
 
-var
-  OpRank:array [TOpChar] of Byte;  //操作符优先级表（根据操作符的首字母来确定）
 threadvar
   LastExprType:TExprType;
 const
   OpCh_None:TOpChar=#0;
   OpCh_Func:TOpChar=#255;
-  OpCh_Sentence:TOpChar=';';
-  OpCh_Define:TOpChar=' ';   //2011-09-18
   Digits: set of Char=['0'..'9'];
-  VarBegin: set of Char=['a'..'z', 'A'..'Z', '_', '$', '@', #129..#254];  //允许$,@以及汉字
-  VarBody: set of Char=['a'..'z', 'A'..'Z', '_', '$', '@', '0'..'9', #129..#254];
-  MathOp1: set of Char=['!', '~'];  //单目运算符
-  MathOp2: set of Char=['+', '-', '*', '/', '\', '%', '^', '&', '|', '.', ':', ';', '?'];  //双目运算符
-  CompOp2: set of Char=['=', '>', '<'];  //比较运算符
-  MathOp3: set of Char=['+', '-', '*', '/', '\', '%', '^', '&', '|'];  //双目数学运算符
-  MathOp4: set of Char=['*', '/', '\', '%', '^', '&', '|'];  //非符号双目数学运算符
   NumVarTypes: set of Byte=[varSmallint,varInteger,varSingle,varDouble,varCurrency,varByte,varWord,varLongWord];
 
 function Obj2Var(O: TObject): Variant;
@@ -442,16 +485,52 @@ begin
   r:=240;
   OpRank['(']:=r; OpRank['[']:=r; OpRank['.']:=r; Dec(r,20);
   OpRank['!']:=r; OpRank['~']:=r; OpRank['N']:=r; Dec(r,20);  //NOT
-  OpRank['*']:=r; OpRank['/']:=r; OpRank['\']:=r; OpRank['%']:=r; Dec(r,20);
-  OpRank['+']:=r; OpRank['-']:=r; Dec(r,20);
-  OpRank['>']:=r; OpRank['<']:=r; OpRank['=']:=r; Dec(r,20);
+  OpRank['*']:=r; OpRank['/']:=r; OpRank['\']:=r; OpRank['%']:=r; RK_Multi:=r;  Dec(r,20);
+  OpRank['+']:=r; OpRank['-']:=r; RK_Add:=r;      Dec(r,10);
+  RK_Shift:=r;    Dec(r,10);   // << >>  <<<  >>>
+  OpRank['>']:=r; OpRank['<']:=r; OpRank['=']:=r; RK_Compare:=r;  Dec(r,20);
   OpRank['&']:=r; OpRank['|']:=r; OpRank['^']:=r; Dec(r,20);
   OpRank['A']:=r; Dec(r,20);  //AND
   OpRank['O']:=r; OpRank['X']:=r; Dec(r,20);  //OR XOR
   OpRank['I']:=r; Dec(r,20);  //IN IS
-  OpRank[':']:=r; OpRank[',']:=r; Dec(r,20);  //:=
-  OpRank[';']:=r; //Sentence end
-  OpRank[OpCh_Define]:=r+1;  //Define  2011-09-18
+  OpRank[':']:=r; RK_SetValue:=r; Dec(r,10);  //:=
+  OpRank[',']:=r; Dec(r,10);  // ,
+  OpRank[';']:=r; RK_Sentence:=r; //Sentence end
+  OpRank[OpCh_Define]:=r+2;  //Define  2011-09-18
+end;
+
+function GetStdOpRank(FirstCh: Char; const Op: String):Byte;
+var
+  n:Integer;
+  LastCh:Char;
+begin
+  n:=Length(Op);
+  if n>1 then
+  begin
+    LastCh:=Op[n];
+    if FirstCh in ['<','>'] then  //  >>  <<  >>>  <<<  ....
+    begin
+      if FirstCh=LastCh then
+      begin
+        Result:=RK_Shift;
+        exit;
+      end
+      else if LastCh='=' then  //  >=  >>=  <=  <<=  ...
+      begin
+        if n=2 then  // >=  <=
+          Result:=OpRank[FirstCh]
+        else
+          Result:=RK_SetValue;
+        exit;
+      end;
+    end
+    else if (FirstCh<>':') and (LastCh='=') then   // +=  *=  ^=  ...
+    begin
+      Result:=RK_SetValue;
+      exit;
+    end;
+  end;
+  Result:=OpRank[FirstCh];
 end;
 
 function IsNormalVarName(const Name: String):Boolean;
@@ -894,7 +973,7 @@ function TJSONExprParser.Eval(AObj: TZAbstractObject): Variant;
     Result:=false;
     v1:=GetP1;
     NullVal:=VarIsNull(v1);
-    Z:=JSONObject(AObj).Opt(JEP_ParamHeader+'2');
+    Z:=JSONObject(AObj).Opt(JEP_Param2);
     if Z=nil then exit;
     if (Z.ClassType=JSONObject) and (JSONObject(Z).OptString(JEP_Operator)='(') then
     begin
@@ -972,10 +1051,10 @@ function TJSONExprParser.Eval(AObj: TZAbstractObject): Variant;
     begin
       if not VarIsArray(Result) then
       begin
-        if VarType(Result)=vtString then
+        if VarType(Result)=varString then  //2011-09-24  Bug fixed.
         begin
           try
-            Result:=String(Result)[Integer(GetPN(i))];
+            Result:=String(Result)[Integer(GetP2)];
           except
             Result:=Null
           end;
@@ -1206,7 +1285,7 @@ begin
             {$IFNDEF NO_TRACE}
               if TraceOnLine then
               begin
-                Z:=JSONObject(AObj).Opt(JEP_ParamHeader+'2');
+                Z:=JSONObject(AObj).Opt(JEP_Param2);
                 if Assigned(FOnLineComplete) then
                   FOnLineComplete(Self,JSONObject(Z),Result);
               end;
@@ -1415,12 +1494,12 @@ begin
             else
               Done:=false;
           'D':
-            if Func='DEC' then
+            if Func=JEF_Dec then
               SetValue(GetP1-1)
             else
               Done:=false;
           'F':
-            if Func='FOR' then
+            if Func=JEF_For then
             begin
               n:=0;
               try
@@ -1428,24 +1507,37 @@ begin
                 while VarEqual(GetP3,true) do  //Check
                 begin
                   Inc(n);
-                  GetPN(4); //Body
+                  try
+                    GetPN(4); //Body
+                  except
+                    on e:TContinueException do
+                    begin
+                    end;
+                  end;
                   GetP2;    // Inc(i)
                 end;
               except
+                on e:TExitException do
+                begin
+                  raise TExitException.Create('');
+                end;
+                on e:TBreakException do
+                begin
+                end;
               end;
               Result:=n;
             end
             else
               Done:=false;
           'I':
-            if Func='INC' then
+            if Func=JEF_Inc then
               SetValue(GetP1+1)
             else if Func='INT' then  //2010-08-11
               Result:=Integer(GetP1)
             else
               Done:=false;
           'L':
-            if Func='LEN' then
+            if Func=JEF_Len then
             begin
               v1:=GetP1;
             {$IFNDEF NO_COLLECTION}
@@ -1534,7 +1626,7 @@ begin
             else
               Done:=false;
           'C':
-            if Func='CASE' then  //2011-09-22
+            if Func=JEF_Case then  //2011-09-22
             begin
               v1:=GetP1;
               i:=2;
@@ -1561,13 +1653,27 @@ begin
             else
               Done:=false;
           'E':
-            if Func=JEP_Eval then  //2011-09-03
+            if Func=JEF_Eval then  //2011-09-03
             begin
               Result:=DoEval(GetP1);
             end
-            else if Func='EXIT' then  //2011-09-03
+            else if Func=JEF_Exit then  //2011-09-03
             begin
               raise TExitException.Create('');
+            end
+            else
+              Done:=false;
+          'P':
+            if Func=JEF_Pred then  //2011-09-28
+            begin
+              Result:=Pred(Integer(GetP1));
+            end
+            else
+              Done:=false;
+          'S':
+            if Func=JEF_Succ then  //2011-09-28
+            begin
+              Result:=Succ(Integer(GetP1));
             end
             else
               Done:=false;
@@ -1579,7 +1685,7 @@ begin
             else
               Done:=false;
           'W':
-            if Func='WAIT' then  //2011-09-06
+            if Func=JEF_Wait then  //2011-09-06
             begin
               Result:=Cardinal(GetP1);
               Sleep(Result);
@@ -1594,7 +1700,7 @@ begin
       begin
         case Func1 of
           'B':
-            if Func='BREAK' then
+            if Func=JEF_Break then
             begin
               raise TBreakException.Create(''); // Abort;  //产生哑异常，跳出循环结构
             end
@@ -1608,7 +1714,7 @@ begin
             else
               Done:=false;
           'P':
-            if Func='PRINT' then
+            if Func=JEF_Print then
             begin
               if Assigned(VarToStrDefFunc) then
                 Result:=VarToStrDefFunc(GetP1,'')
@@ -1622,33 +1728,61 @@ begin
             else
               Done:=false;
           'T':
-            if Func='TIMES' then
+            if Func=JEF_Times then
             begin
               n:=GetP1;
               c:=0;
               try
-                for i:=n downto 0 do
+                for i:=n-1 downto 0 do
                 begin
                   Inc(c);
-                  GetP2;
+                  try
+                    GetP2;
+                  except
+                    on e:TContinueException do  //2011-09-24
+                    begin
+                      continue;
+                    end;
+                  end;
                 end;
               except
+                on e:TExitException do
+                begin
+                  raise TExitException.Create('');
+                end;
+                on e:TBreakException do
+                begin
+                end;
               end;
               Result:=c;
             end
             else
               Done:=false;
           'W':
-            if Func='WHILE' then
+            if Func=JEF_While then
             begin
               n:=0;
               try
                 while VarEqual(GetP1,true) do
                 begin
                   Inc(n);
-                  GetP2;
+                  try
+                    GetP2;
+                  except
+                    on e:TContinueException do  //2011-09-24
+                    begin
+                      continue;
+                    end;
+                  end;
                 end;
               except
+                on e:TExitException do
+                begin
+                  raise TExitException.Create('');
+                end;
+                on e:TBreakException do
+                begin
+                end;
               end;
               Result:=n;  //循环结构的返回值就是进入循环体的次数
             end
@@ -1662,13 +1796,13 @@ begin
       begin
         case Func1 of
           'I':
-            if Func='ISNULL' then
+            if Func=JEF_IsNull then
             begin
               Result:=GetP1;
               if VarIsNull(Result) then
                 Result:=GetP2;
             end
-            else if Func='IFELSE' then  //2011-09-22
+            else if Func=JEF_IfElse then  //2011-09-22
             begin
               v1:=GetP1;
               if VarType(v1)=varBoolean then
@@ -1696,17 +1830,35 @@ begin
             else
               Done:=false;
           'R':
-            if Func='REPEAT' then
+            if Func=JEF_Repeat then
             begin
               n:=0;
               try
                 repeat
                   Inc(n);
-                  GetP1;
+                  try
+                    GetP1;
+                  except
+                    on e:TContinueException do  //2011-09-24
+                    begin
+                      continue;
+                    end;
+                  end;
                 until VarEqual(GetP2,true);
               except
+                on e:TExitException do
+                begin
+                  raise TExitException.Create('');
+                end;
+                on e:TBreakException do
+                begin
+                end;
               end;
               Result:=n;  //循环结构的返回值就是进入循环体的次数
+            end
+            else if Func=JEF_Return then
+            begin
+              raise TExitException.CreateVal(GetP1);
             end
             else
               Done:=false;
@@ -1725,7 +1877,7 @@ begin
       begin
         case Func1 of
           'B':
-            if Func='BETWEEN' then
+            if Func=JEF_Between then
             begin
               Result:=false;
               if ParamCnt>=3 then  //2011-09-01
@@ -1739,7 +1891,7 @@ begin
             else
               Done:=false;
           'I':
-            if Func='ISARRAY' then
+            if Func=JEF_IsArray then
             begin
               Result:=GetP1;
               if VarIsArray(Result) then
@@ -1747,6 +1899,15 @@ begin
             end
             else
               Done:=false;
+          {'R':
+            if Func=JEF_Reverse then
+            begin
+              Result:=GetP1;
+              if VarIsArray(Result) then
+                Result:=GetP2;
+            end
+            else
+              Done:=false;}
           else
             Done:=false;
         end;
@@ -1754,6 +1915,13 @@ begin
       8:
       begin
         case Func1 of
+          'C':
+            if Func=JEF_Continue then  //2011-09-24
+            begin
+              raise TContinueException.Create(''); //产生异常，跳出循环结构
+            end
+            else
+              Done:=false;
           'D':
             if Func='DATETIME' then  //2011-09-01
             begin
@@ -1817,6 +1985,10 @@ begin
     on e:TBreakException do
     begin
       raise TBreakException.Create(e.Message);
+    end;
+    on e:TContinueException do
+    begin
+      raise TContinueException.Create(e.Message);
     end;
     on e:Exception do
       Result:=Null;
@@ -2058,6 +2230,12 @@ function TJSONExprParser.ExprToJSON(const Expr: String;
 label DoAddOp;
 type
   TAddMode=(amNone, amBlock, amFunc, amOperator, amBlockOp);
+  TLevelRec=record
+    Obj:TZAbstractObject;
+    BC:Integer;  //Block depth in eath level.  括号层级
+    OpCh:Char;   //各个层次的操作符首字符  如果是普通函数或者没有操作符，就是#0
+    Rank:Byte; //操作符优先级
+  end;
 var
   SubString: String;
   //Use this function to check whether the name is a var or a function.
@@ -2072,22 +2250,21 @@ var
     end;
   end;
 var
-  JObjs:array[0..64] of TZAbstractObject;
-  LevelBC:array[0..64] of Integer;  //Block depth in eath level.  括号层级
-  LevelOpCh:array[0..64] of TOpChar;  //各个层次的操作符  如果是普通函数或者没有操作符，就是#0
+  Levels:array[0..MaxJETreeLevel] of TLevelRec;
   JLevel,BlockCnt:Integer;
   EndPos:Integer;
   LastIsVar:Boolean;
   function ExprLevel:Integer;//{$IF COMPILERVERSION>=18}inline;{$IFEND}
   begin
     Result:=JLevel;
-    if (JObjs[JLevel]=nil) or (JObjs[JLevel].ClassType=JSONObject) then exit;
-    Dec(Result);  //Result:=JLevel-1;
+    with Levels[JLevel] do
+    if (Obj=nil) or (Obj.ClassType=JSONObject) then exit;
+    if Result>0 then Dec(Result);
   end;
   function FuncLevel:Integer;
   begin
     Result:=ExprLevel;
-    while LevelBC[Result]>=BlockCnt do
+    while Levels[Result].BC>=BlockCnt do
     begin
       Dec(Result);
       if Result<0 then
@@ -2095,7 +2272,7 @@ var
         Inc(Result);
         break;
       end;
-      if (LevelBC[Result]<BlockCnt) and not (LevelOpCh[Result] in [OpCh_Func,'(','[']) then
+      if (Levels[Result].BC<BlockCnt) and not (Levels[Result].OpCh in [OpCh_Func,'(','[']) then
       begin
         Inc(Result);
         exit;
@@ -2105,8 +2282,9 @@ var
   function BlockLevel:Integer;
   begin
     Result:=ExprLevel;
-    while (LevelBC[Result]>0) and ((Result>0) and (LevelBC[Result]=LevelBC[Result-1])) do
+    while (Result>0) and (Levels[Result].BC=Levels[Result-1].BC) do
     begin
+      if Levels[Result].BC<BlockCnt then break;      
       Dec(Result);
       if Result<0 then break;
     end;
@@ -2114,67 +2292,72 @@ var
   function InBlockLevel(Rank: Byte=1):Integer;  // Func( X+Y*2    1+X.Next.Val
   var
     Op:String;
+    Ch:Char;
   begin
     Result:=ExprLevel;
     //If the expression is inside a block or not...
-    if LevelBC[Result]>BlockCnt then  // ... A ? (B ? C) / ...  or  ... A ?  Func( B ? C ) / ...
+    if Levels[Result].BC>BlockCnt then  // ... A ? (B ? C) / ...  or  ... A ?  Func( B ? C ) / ...
     begin
       repeat
         Dec(Result);
         if Result<0 then break;
-        if LevelOpCh[Result]=OpCh_Func then continue; //函数优先级最高，无需比较
-        Op:=JSONObject(JObjs[Result]).OptString(JEP_Operator);
+        if Levels[Result].OpCh=OpCh_Func then continue; //函数优先级最高，无需比较
+        Op:=JSONObject(Levels[Result].Obj).OptString(JEP_Operator);
         if Op<>'' then
-          if OpRank[Op[1]]<Rank then break;
-      until LevelBC[Result]<BlockCnt;
+        begin
+          Ch:=Op[1];
+          if GetStdOpRank(Ch,Op)<Rank then break;
+          if (Ch in ['(','[','{']) and (Result>0) and (Levels[Result-1].BC<BlockCnt) then break
+        end;
+      until Levels[Result].BC<BlockCnt;
     end
     else  // ... A ? B / ...
-      while LevelBC[Result]=BlockCnt do
+      while Levels[Result].BC=BlockCnt do
       begin
         Dec(Result);
         if Result<0 then break;
-        Op:=JSONObject(JObjs[Result]).OptString(JEP_Operator);
+        Op:=JSONObject(Levels[Result].Obj).OptString(JEP_Operator);
         if Op<>'' then
-          if OpRank[Op[1]]<Rank then break;
+          if GetStdOpRank(Op[1],Op)<Rank then break;
       end;
     Inc(Result);
+  end;
+  procedure WriteEmpty;
+  var
+    e,n:Integer;
+  begin
+    e:=ExprLevel;
+    with JSONObject(Levels[e].Obj) do
+    begin
+      n:=Length;
+      Put(JEP_ParamHeader+IntToStr(n),null);
+      JLevel:=e+1;
+      with Levels[JLevel] do
+      begin
+        Obj:=ValObjByIndex[n];
+        BC:=BlockCnt;
+        OpCh:=OpCh_None;
+        Rank:=0;
+      end;
+    end;
   end;
   procedure WriteFloat(F: Double);
   var
     e,n:Integer;
   begin
     e:=ExprLevel;
-    with JSONObject(JObjs[e]) do
+    with JSONObject(Levels[e].Obj) do
     begin
       n:=Length;
       Put(JEP_ParamHeader+IntToStr(n),F);
       JLevel:=e+1;
-      JObjs[JLevel]:=ValObjByIndex[n];
-      LevelBC[JLevel]:=BlockCnt;
-      LevelOpCh[JLevel]:=OpCh_None;
-    end;
-  end;
-  procedure WriteStr(const S: String);
-  var
-    e,n:Integer;
-  begin
-    //将两个前后连续定义、且没有其它操作符夹杂的的字符串合并为一个 eg:   'ABC' 'abc'  => 'ABCabc'
-    //可以实现用字符串加长变量名的效果  eg:  X2' Old'  will be var name "X2 Old"
-    if (JObjs[JLevel].ClassType=_String) then
-    begin
-      with _String(JObjs[JLevel]) do
-        AsString:=AsString+S;
-      exit;
-    end;
-    e:=ExprLevel;
-    with JSONObject(JObjs[e]) do
-    begin
-      n:=Length;
-      Put(JEP_ParamHeader+IntToStr(n),JEP_StrParamHeader+S);
-      JLevel:=e+1;
-      JObjs[JLevel]:=ValObjByIndex[n];
-      LevelBC[JLevel]:=BlockCnt;
-      LevelOpCh[JLevel]:=OpCh_None;
+      with Levels[JLevel] do
+      begin
+        Obj:=ValObjByIndex[n];
+        BC:=BlockCnt;
+        OpCh:=OpCh_None;
+        Rank:=0;
+      end;
     end;
   end;
   procedure WriteObjStr(const S: String);
@@ -2188,14 +2371,18 @@ var
       exit;
     end;
     e:=ExprLevel;
-    with JSONObject(JObjs[e]) do
+    with JSONObject(Levels[e].Obj) do
     begin
       n:=Length;
       Put(JEP_ParamHeader+IntToStr(n),J);
       JLevel:=e+1;
-      JObjs[JLevel]:=ValObjByIndex[n];
-      LevelBC[JLevel]:=BlockCnt;
-      LevelOpCh[JLevel]:=OpCh_None;
+      with Levels[JLevel] do
+      begin
+        Obj:=ValObjByIndex[n];
+        BC:=BlockCnt;
+        OpCh:=OpCh_None;
+        Rank:=0;
+      end;
     end;
   end;
   procedure WriteBool(B: Boolean);
@@ -2203,14 +2390,18 @@ var
     e,n:Integer;
   begin
     e:=ExprLevel;
-    with JSONObject(JObjs[e]) do
+    with JSONObject(Levels[e].Obj) do
     begin
       n:=Length;
       Put(JEP_ParamHeader+IntToStr(n),B);
       JLevel:=e+1;
-      JObjs[JLevel]:=ValObjByIndex[n];
-      LevelBC[JLevel]:=BlockCnt;
-      LevelOpCh[JLevel]:=OpCh_None;
+      with Levels[JLevel] do
+      begin
+        Obj:=ValObjByIndex[n];
+        BC:=BlockCnt;
+        OpCh:=OpCh_None;
+        Rank:=0;
+      end;
     end;
   end;
   procedure WriteNull;
@@ -2218,71 +2409,19 @@ var
     e,n:Integer;
   begin
     e:=ExprLevel;
-    with JSONObject(JObjs[e]) do
+    with JSONObject(Levels[e].Obj) do
     begin
       n:=Length;
       Put(JEP_ParamHeader+IntToStr(n),CNULL);
       JLevel:=e+1;
-      JObjs[JLevel]:=ValObjByIndex[n];
-      LevelBC[JLevel]:=BlockCnt;
-      LevelOpCh[JLevel]:=OpCh_None;
-    end;
-  end;
-  procedure WriteValVar(v: Variant);
-  begin
-    if VarIsNull(v) then
-      WriteNull
-    else
-      case VarType(v) of
-        varBoolean: WriteBool(Boolean(v));
-        varString: WriteStr(String(v));
-        else
-          WriteFloat(StrToFloat(VarToStr(v)));  //2011-09-02
-      end;
-  end;
-  function WriteVar(VarName: String):Boolean;
-  var
-    e,n:Integer;
-    v:Variant;
-    mstr:String;
-  begin
-    e:=ExprLevel;
-    with JSONObject(JObjs[e]) do
-    begin
-      n:=Length;
-      if n>1 then
+      with Levels[JLevel] do
       begin
-        mstr:=OptString(JEP_Operator);
-        if (mstr='') or ((n>2) and (mstr=';') and LastIsVar) then  //已经有了一个参数，但还缺少操作符
-        begin
-          Result:=false;
-          exit;
-        end;
+        Obj:=ValObjByIndex[n];
+        BC:=BlockCnt;
+        OpCh:=OpCh_None;
+        Rank:=0;
       end;
-      if (VarHelper<>nil) and UseVarHelperOnParse then
-      begin
-        //尽可能将变量的值直接代入表达式
-        if VarHelper.GetVar(VarName,v) then
-        begin
-          WriteValVar(v);
-          Result:=true;
-          exit;
-        end;
-        //对变量名进行规范化
-        if not VarHelper.CheckAndTransName(VarName) then
-        begin
-          Result:=false;
-          exit;
-        end;
-      end;
-      Put(JEP_ParamHeader+IntToStr(n),VarName);
-      JLevel:=e+1;
-      JObjs[JLevel]:=ValObjByIndex[n];
-      LevelBC[JLevel]:=BlockCnt;
-      LevelOpCh[JLevel]:=OpCh_None;
     end;
-    LastIsVar:=true;
-    Result:=true;
   end;
   function NewFuncObj(const AFunc: String):JSONObject; {$IF COMPILERVERSION>=18}inline;{$IFEND}
   begin
@@ -2297,7 +2436,7 @@ var
     IsStdOp:Boolean;
   begin
     e:=ExprLevel;
-    with JSONObject(JObjs[e]) do
+    with JSONObject(Levels[e].Obj) do
     begin
       n:=Length;
       mstr:=OptString(JEP_Operator);
@@ -2307,14 +2446,18 @@ var
         begin
           //将最后一个提取出来
           KeyStr:=KeyByIndex[Length-1];  //类型指示符
-          JObjs[JLevel]:=NewFuncObj(' ');
+          Levels[JLevel].Obj:=NewFuncObj(' ');
           Z:=Remove(KeyStr);
-          JSONObject(JObjs[JLevel]).Put(JEP_Param1,Z);
-          Put(KeyStr,JObjs[JLevel]);
+          JSONObject(Levels[JLevel].Obj).Put(JEP_Param1,Z);
+          Put(KeyStr,Levels[JLevel].Obj);
           Inc(JLevel);
-          JObjs[JLevel]:=Z;
-          LevelBC[JLevel]:=BlockCnt;
-          LevelOpCh[JLevel]:=OpCh_Define;
+          with Levels[JLevel] do
+          begin
+            Obj:=Z;
+            BC:=BlockCnt;
+            OpCh:=OpCh_Define;
+            Rank:=OpRank[OpCh_Define];
+          end;
           Result:=WritePerfix(Perfix,IsEnd);
           exit;
         end
@@ -2345,9 +2488,17 @@ var
             end;
             Put(JEP_Perfix,Z);
           end;
-          LevelOpCh[e]:=OpCh_Define;
+          with Levels[e] do
+          begin
+            OpCh:=OpCh_Define;
+            Rank:=OpRank[OpCh_Define];
+          end;
           Put(JEP_Param1,Perfix);
-          LevelOpCh[JLevel]:=OpCh_Define;
+          with Levels[JLevel] do
+          begin
+            OpCh:=OpCh_Define;
+            Rank:=OpRank[OpCh_Define];
+          end;
         end;
       end;
     end;
@@ -2356,11 +2507,13 @@ var
   procedure InitLevel;
   begin
     //初始的情况
-    if (JObjs[JLevel]=nil) then
-    begin
-      JObjs[JLevel]:=NewFuncObj('');
-      LevelOpCh[JLevel]:=OpCh_None;
-    end;  
+    with Levels[JLevel] do
+      if (Obj=nil) then
+      begin
+        Obj:=NewFuncObj('');
+        OpCh:=OpCh_None;
+        Rank:=0;
+      end;
   end;
   procedure AddOp({$IFDEF NO_OPTRANSLATE}const {$ENDIF}Func: String; AddMode: TAddMode=amOperator; UsePiror: Boolean=false);
   var
@@ -2374,18 +2527,18 @@ var
     LastIsVar:=false;
   {$IFNDEF NO_OPTRANSLATE}
     if OpHelper<>nil then  //2011-09-04
-      Func:=OpHelper.TranslateOperator(Func,JObjs[JLevel]);
+      Func:=OpHelper.TranslateOperator(Func,Levels[JLevel].Obj);
   {$ENDIF}
     //最后一个Symbol是简单值或变量的情况 -- 应n当将其提升，嵌入到Func表达式内
-    if JObjs[JLevel].ClassType<>JSONObject then
+    if Levels[JLevel].Obj.ClassType<>JSONObject then
     begin
       //简单变量后跟双目操作符
       if UsePiror then
       begin
         n:=JLevel-1;
-        JP:=JSONObject(JObjs[n]); //表达式JSON对象
+        JP:=JSONObject(Levels[n].Obj); //表达式JSON对象
         //没有操作符的表达式 -- 填入Func
-        if LevelOpCh[n]=OpCh_None then
+        if Levels[n].OpCh=OpCh_None then
         begin
           //处理 ... var A:... 的情况  2011-09-18
           with JP do
@@ -2412,33 +2565,51 @@ var
               mstr:=ValByIndex[Length-1];
               Delete(length-1);
               //将操作符置于内层  如： var A:int;  const M=100;
-              JObjs[JLevel]:=NewFuncObj(Func).Put(JEP_Param1,mstr);
-              Put(JEP_Param1,JObjs[JLevel]);
-              LevelOpCh[n]:=OpCh_Define;
-              if AddMode=amOperator then
-                LevelOpCh[JLevel]:=Func[1] //AddMode;
-              else
-                LevelOpCh[JLevel]:=OpCh_Func;
+              Levels[JLevel].Obj:=NewFuncObj(Func).Put(JEP_Param1,mstr);
+              Put(JEP_Param1,Levels[JLevel].Obj);
+              with Levels[n] do
+              begin
+                OpCh:=OpCh_Define;
+                Rank:=OpRank[' '];
+              end;
+              with Levels[JLevel] do
+                if AddMode=amOperator then
+                begin
+                  OpCh:=Func[1]; //AddMode;
+                  Rank:=GetStdOpRank(OpCh,Func);
+                end
+                else begin
+                  OpCh:=OpCh_Func;
+                  Rank:=OpRank[OpCh_Func];
+                end;
               exit;
             end;
           JP.Put(JEP_Operator,Func);
-          if (AddMode=amOperator) or (AddMode=amBlockOp) then  //2011-09-01
-            LevelOpCh[n]:=Func[1]
-          else if AddMode=amFunc then
-            LevelOpCh[n]:=OpCh_Func;
+          with Levels[n] do
+            if (AddMode=amOperator) or (AddMode=amBlockOp) then  //2011-09-01
+            begin
+              OpCh:=Func[1];
+              Rank:=GetStdOpRank(OpCh,Func);
+            end
+            else if AddMode=amFunc then
+            begin
+              OpCh:=OpCh_Func;
+              Rank:=OpRank[OpCh_Func];
+            end;
           Dec(JLevel);
           exit;
         end;
-        if LevelBC[n]>=BlockCnt then  //当前双目操作符和前一个表达式位于相同的括号层次
+        with Levels[n] do
         begin
-          if (AddMode=amOperator) and (Func<>'') then
+          if (BC>=BlockCnt) and (OpCh<>'[') then  //当前双目操作符和前一个表达式位于相同的括号层次
           begin
-            //mstr:=JSONObject(JObjs[n]).OptString(BIOS_Operator);
-            //if (mstr<>'') and (OpRank[Func[1]]<=OpRank[mstr[1]]) then
-            if (LevelOpCh[n]<>OpCh_None) and (OpRank[Func[1]]<=OpRank[LevelOpCh[n]]) then
+            if (AddMode=amOperator) and (Func<>'') then
             begin
-              JLevel:=InBlockLevel(OpRank[Func[1]]); //InBlockLevel; //n;
-              goto CommonCase;
+              if (OpCh<>OpCh_None) and (GetStdOpRank(Func[1],Func)<=Rank) then
+              begin
+                JLevel:=InBlockLevel(GetStdOpRank(Func[1],Func)); //InBlockLevel; //n;
+                goto CommonCase;
+              end;
             end;
           end;
         end;
@@ -2447,26 +2618,37 @@ var
           mstr:=KeyByIndex[Length-1];  //最后一个Key
           Z:=Remove(mstr);
         end;
-        JObjs[JLevel]:=NewFuncObj(Func);
-        JSONObject(JObjs[JLevel]).Put(JEP_Param1,Z);
-        JP.Put(mstr,JObjs[JLevel]);
-        if Func='' then
-          LevelOpCh[JLevel]:=OpCh_None
-        else if AddMode=amOperator then
-          LevelOpCh[JLevel]:=Func[1] //AddMode;
-        else
-          LevelOpCh[JLevel]:=OpCh_Func;
+        with Levels[JLevel] do
+        begin
+          Obj:=NewFuncObj(Func);
+          JSONObject(Obj).Put(JEP_Param1,Z);
+          JP.Put(mstr,Obj);
+          if Func='' then
+          begin
+            OpCh:=OpCh_None;
+            Rank:=0;
+          end
+          else if AddMode=amOperator then
+          begin
+            OpCh:=Func[1]; //AddMode;
+            Rank:=GetStdOpRank(OpCh,Func);
+          end
+          else begin
+            OpCh:=OpCh_Func;
+            Rank:=OpRank[OpCh_Func];
+          end;
+        end;
       end
       else begin
         n:=JLevel-1;
-        if LevelOpCh[n]=OpCh_None then
+        if Levels[n].OpCh=OpCh_None then
         begin
           if Func<>'' then
           begin
             //将修饰符转化为 perfix （数组）  2011-09-18
             //如 'public static function' -> {op:"",p1:"public",p2:"static",p3:"function"}
             //转化为: {op:" function",pf:["public","static"], ....... }
-            with JSONObject(JObjs[n]) do
+            with JSONObject(Levels[n].Obj) do
             begin
               //最后一个是类型指示符
               if Length>1 then
@@ -2486,20 +2668,39 @@ var
                 end;
                 Put(JEP_Perfix,Z);
               end;
-              JObjs[JLevel]:=NewFuncObj(Func);
-              Put(JEP_Param1,JObjs[JLevel]);
+              Levels[JLevel].Obj:=NewFuncObj(Func);
+              Put(JEP_Param1,Levels[JLevel].Obj);
             end;
-            LevelOpCh[n]:=OpCh_Define;
-            LevelOpCh[JLevel]:=OpCh_Func;
+            with Levels[n] do
+            begin
+              OpCh:=OpCh_Define;
+              Rank:=OpRank[' '];
+            end;
+            with Levels[JLevel] do
+            begin
+              OpCh:=OpCh_Func;
+              Rank:=OpRank[OpCh_Func];
+            end;
             exit;
           end;
-          JSONObject(JObjs[n]).Put(JEP_Operator,Func);
-          if Func='' then
-            LevelOpCh[n]:=OpCh_None
-          else if AddMode=amOperator then
-            LevelOpCh[n]:=Func[1] //AddMode;
-          else
-            LevelOpCh[n]:=OpCh_Func;
+          with Levels[n] do
+          begin
+            JSONObject(Obj).Put(JEP_Operator,Func);
+            if Func='' then
+            begin
+              OpCh:=OpCh_None;
+              Rank:=0;
+            end
+            else if AddMode=amOperator then
+            begin
+              OpCh:=Func[1]; //AddMode;
+              Rank:=GetStdOpRank(OpCh,Func);
+            end
+            else begin
+              OpCh:=OpCh_Func;
+              Rank:=OpRank[OpCh_Func];
+            end;
+          end;
         end;
         Dec(JLevel);
       end;
@@ -2513,28 +2714,37 @@ var
         JLevel:=ExprLevel;  //2011-09-01  A[1][2]
     end;
   CommonCase:
-    J:=JSONObject(JObjs[JLevel]);
+    J:=JSONObject(Levels[JLevel].Obj);
     if AddMode=amFunc then
       with J do
-        IsEmpty:=(Length<=1) and (LevelOpCh[JLevel]=OpCh_None) //(OptString(BIOS_Operator)='')
+        IsEmpty:=(Length<=1) and (Levels[JLevel].OpCh=OpCh_None) //(OptString(BIOS_Operator)='')
     else
       IsEmpty:=false;
-    if ((AddMode=amOperator) or IsEmpty) and (LevelOpCh[JLevel]=OpCh_None) then
+    if ((AddMode=amOperator) or IsEmpty) and (Levels[JLevel].OpCh=OpCh_None) then
     begin
       J.Put(JEP_Operator,Func);
-      //LevelOpCh[JLevel]:=AddMode;
-      if AddMode=amOperator then
-        LevelOpCh[JLevel]:=Func[1] //AddMode;
-      else if AddMode=amFunc then
-        LevelOpCh[JLevel]:=OpCh_Func
-      else
-        LevelOpCh[JLevel]:=OpCh_None
+      //Levels[JLevel].OpCh:=AddMode;
+      with Levels[JLevel] do
+        if AddMode=amOperator then
+        begin
+          OpCh:=Func[1]; //AddMode;
+          Rank:=GetStdOpRank(OpCh,Func);
+        end
+        else if AddMode=amFunc then
+        begin
+          OpCh:=OpCh_Func;
+          Rank:=OpRank[OpCh_Func];
+        end
+        else begin
+          OpCh:=OpCh_None;
+          Rank:=0;
+        end;
     end
-    else if (LevelOpCh[JLevel]=OpCh_Sentence) and (Func=';') then  //平级的 ; 号   2010-06-28
+    else if (Levels[JLevel].OpCh=OpCh_Sentence) and (Func=';') then  //平级的 ; 号   2010-06-28
       exit
     else begin
       JN:=NewFuncObj(Func);
-      JObjs[JLevel+1]:=JN;
+      Levels[JLevel+1].Obj:=JN;
       //按照左侧优先结合的规律进行重新组合——考虑运算符的优先级
       // not X  =>  (not X) or Y
       // X + Y  =>  ( X + Y ) - Z
@@ -2542,27 +2752,7 @@ var
       begin
         //当前Level的所有者
         if JLevel>0 then
-        begin
-          if LevelBC[JLevel]>=BlockCnt then
-            JP:=JSONObject(JObjs[JLevel-1])
-          else begin
-            with J do
-            begin
-              mstr:=JEP_ParamHeader+IntToStr(Length-1);
-              JN.Put(JEP_ParamHeader+'1',Remove(mstr));
-              Put(mstr,JN);
-            end;
-            Inc(JLevel);
-            LevelBC[JLevel]:=BlockCnt;
-            if Func='' then
-              LevelOpCh[JLevel]:=OpCh_None
-            else if AddMode=amOperator then
-              LevelOpCh[JLevel]:=Func[1]
-            else
-              LevelOpCh[JLevel]:=OpCh_Func;
-            exit;
-          end;
-        end
+          JP:=JSONObject(Levels[JLevel-1].Obj)
         else
           JP:=nil;
         if JP<>nil then
@@ -2578,27 +2768,152 @@ var
         end
         else
           JN.Put(JEP_Param1,J);
-        JObjs[JLevel]:=JN;
-        if Func='' then
-          LevelOpCh[JLevel]:=OpCh_None
-        else if AddMode in [amOperator,amBlockOp] then
-          LevelOpCh[JLevel]:=Func[1]
-        else
-          LevelOpCh[JLevel]:=OpCh_Func;
+        with Levels[JLevel] do
+        begin
+          Obj:=JN;
+          if Func='' then
+          begin
+            OpCh:=OpCh_None;
+            Rank:=0;
+          end
+          else if AddMode in [amOperator,amBlockOp] then
+          begin
+            OpCh:=Func[1];
+            Rank:=GetStdOpRank(OpCh,Func);
+          end
+          else begin
+            OpCh:=OpCh_Func;
+            Rank:=OpRank[OpCh_Func];
+          end;
+        end;
         exit;
       end
       else
         with J do
-          Put(JEP_ParamHeader+IntToStr(Length),JObjs[JLevel+1]);
-      LevelBC[JLevel+1]:=BlockCnt;
+          Put(JEP_ParamHeader+IntToStr(Length),Levels[JLevel+1].Obj);
       Inc(JLevel);
-      if Func='' then
-        LevelOpCh[JLevel]:=OpCh_None
-      else if AddMode in [amOperator,amBlock,amBlockOp] then
-        LevelOpCh[JLevel]:=Func[1]
-      else
-        LevelOpCh[JLevel]:=OpCh_Func;
+      with Levels[JLevel] do
+      begin
+        BC:=BlockCnt;
+        if Func='' then
+        begin
+          OpCh:=OpCh_None;
+          Rank:=0;
+        end
+        else if AddMode in [amOperator,amBlock,amBlockOp] then
+        begin
+          OpCh:=Func[1];
+          Rank:=GetStdOpRank(OpCh,Func);
+        end
+        else begin
+          OpCh:=OpCh_Func;
+          Rank:=OpRank[OpCh_Func];
+        end;
+      end;
     end;
+  end;
+  procedure WriteStr(const S: String);
+  var
+    e,n:Integer;
+    mstr:String;
+    J:TZAbstractObject;
+  begin
+    //将两个前后连续定义、且没有其它操作符夹杂的的字符串合并为一个 eg:   'ABC' 'abc'  => 'ABCabc'
+    //可以实现用字符串加长变量名的效果  eg:  X2' Old'  will be var name "X2 Old"
+    J:=Levels[JLevel].Obj;
+    if (J.ClassType=_String) then
+    begin
+      mstr:=_String(J).toString;
+      if mstr<>'' then
+      begin
+        if mstr[1]=JEP_StrParamHeader then // ... 'ABC' 'abcd' ...
+          _String(J).AsString:=mstr+S
+        else begin // ... XXXXX 'abc' ...
+          AddOp(' ',amOperator,true);
+          WriteStr(S);
+        end;
+      end;
+      exit;
+    end;
+    e:=ExprLevel;
+    with JSONObject(Levels[e].Obj) do
+    begin
+      n:=Length;
+      Put(JEP_ParamHeader+IntToStr(n),JEP_StrParamHeader+S);
+      JLevel:=e+1;
+      with Levels[JLevel] do
+      begin
+        Obj:=ValObjByIndex[n];
+        BC:=BlockCnt;
+        OpCh:=OpCh_None;
+      end;
+    end;
+  end;
+  procedure WriteValVar(v: Variant);
+  begin
+    if VarIsNull(v) then
+      WriteNull
+    else
+      case VarType(v) of
+        varBoolean: WriteBool(Boolean(v));
+        varString: WriteStr(String(v));
+        else
+          WriteFloat(StrToFloat(VarToStr(v)));  //2011-09-02
+      end;
+  end;
+  function WriteVar(VarName: String):Boolean;
+  var
+    e,n:Integer;
+    v:Variant;
+    mstr:String;
+  begin
+    e:=ExprLevel;
+    with JSONObject(Levels[e].Obj) do
+    begin
+      n:=Length;
+      if n>1 then
+      begin
+        mstr:=OptString(JEP_Operator);
+        if (mstr='') or (mstr=' ') or ((n>2) and (mstr=';') and LastIsVar) then  //已经有了一个参数，但还缺少操作符
+        begin
+          Result:=false;
+          exit;
+        end;
+        //  Foo( const VarName )
+        if (BlockCnt>0) and (JLevel>=1) and (Levels[e].BC<Levels[JLevel].BC) then
+        begin
+          Result:=false;
+          exit;
+        end;
+      end;
+      if (VarHelper<>nil) and UseVarHelperOnParse then
+      begin
+        //尽可能将变量的值直接代入表达式
+        if VarHelper.GetVar(VarName,v) then
+        begin
+          WriteValVar(v);
+          Result:=true;
+          exit;
+        end;
+        //对变量名进行规范化
+        if not VarHelper.CheckAndTransName(VarName) then
+        begin
+          Result:=false;
+          exit;
+        end;
+      end;
+      Put(JEP_ParamHeader+IntToStr(n),VarName);
+      JLevel:=e+1;
+      with Levels[JLevel] do
+      begin
+        Obj:=ValObjByIndex[n];
+        BC:=BlockCnt;
+        OpCh:=OpCh_None;
+        Rank:=0;
+      end;
+    end;
+    LastIsVar:=true;
+    Result:=true;
   end;
   function NextCh(CurPos: Integer):Char; //automatic inline
   begin
@@ -2629,14 +2944,14 @@ var
     begin
       if not (SubString[j] in ([#1..' ','.']+VarBegin+VarBody)) then
       begin
-        Result:=SubString[j] in [':','(','=',';'];
+        Result:=SubString[j] in [':','(',')','=',';',','];
         exit;
       end;
       Inc(j);
     end;
     Result:=true;
   end;
-  function IsSentenceEnd(CurPos: Integer):Boolean;
+  function IsPerfixEnd(CurPos: Integer):Boolean;
   var
     j:Integer;
   begin
@@ -2645,7 +2960,7 @@ var
     begin
       if not (SubString[j] in ([#1..' '])) then
       begin
-        Result:=SubString[j] in [';'];
+        Result:=SubString[j] in [';',',',')'];
         exit;
       end;
       Inc(j);
@@ -2684,7 +2999,7 @@ begin
   end;
   JLevel:=0;
   InitLevel;//AddOp('',amNone);
-  LevelBC[0]:=0;
+  Levels[0].BC:=0;
   BlockCnt:=0;
   FuncName:='';
   ExprStart:=true;
@@ -2701,10 +3016,20 @@ begin
     StrValue:='';
     if (ExprStart and (Ch in ['+','-'])) or (Ch in Digits) then  //2011-09-01  Can start with + or -
     begin
-      repeat
-        StrValue:=StrValue + SubString[i];
+      while true do
+      begin
+        StrValue:=StrValue + Ch;
         Inc(I);
-      until not (SubString[I] in Digits+['.']);
+        Ch:=SubString[i];
+        if not (Ch in Digits) then
+        begin
+          if Ch<>'.' then break;
+          if (i<EndPos) and (SubString[i+1]='.') then  //  2..9
+            break
+          else
+            continue;
+        end;
+      end;
       //Scientific Number. eg:  1.34E-20  9E55
       if (i<EndPos) and (SubString[I] in ['e','E']) then
       begin
@@ -2741,15 +3066,15 @@ begin
       repeat
         StrValue:=StrValue + SubString[i];
         Inc(i);
-      until (SubString[I] in VarBody)=false;
+      until not (SubString[I] in VarBody);
       FuncName:=UpperCase(StrValue);
       if (FuncName='AND') or (FuncName='OR') or (FuncName='IN') or (FuncName='IS') or (FuncName='XOR') then  //双目运算符
       begin
-        if JLevel>=High(JObjs) then break;  //强制跳出
+        if JLevel>=MaxJETreeLevel then break;  //强制跳出
         AddOp(FuncName,amOperator,true);
         FuncName:='';
       end
-      else if NextIsBlockBegin(I) or (FuncName='NOT') or (FuncName='BREAK') or (FuncName='EXIT') then
+      else if NextIsBlockBegin(I) or (FuncName='NOT') or (FuncName='CONTINUE') or (FuncName='BREAK') or (FuncName='EXIT') then
       begin
         if not NextIsBlockBegin(I) then
           AddOp(FuncName,amFunc)
@@ -2767,10 +3092,10 @@ begin
       else begin  //非关键字
         if not WriteVar(StrValue) then  //将第二个 "变量" 当成操作符
         begin
-          if JLevel>=High(JObjs) then break;  //强制跳出
+          if JLevel>=MaxJETreeLevel then break;  //强制跳出
           if IsPerfix(i) then  // "public function Foo()"  OR  "out R : Int"  OR  "const A = 100"
           begin
-            WritePerfix(StrValue,(i>EndPos) or IsSentenceEnd(i));
+            WritePerfix(StrValue,(i>EndPos) or IsPerfixEnd(i));
           end  
           else  //  A Like B
             AddOp(FuncName,amOperator,true);
@@ -2780,15 +3105,15 @@ begin
     end
     else if (Ch in MathOp2+CompOp2) then  //双目运算符以及比较操作符、赋值运算符
     begin
-      if JLevel>=High(JObjs) then break;  //强制跳出
+      if JLevel>=MaxJETreeLevel then break;  //强制跳出
       if Ch<>'/' then  //排除单行注释的情况
       begin
         StrValue:=Ch;
         Inc(I);
-        while i<=EndPos do  //2011-09-03  Allow op like:  +=  %>  -*  =<>  ::=  -:>>  |=  :<=  ...
+        while true do  //2011-09-03  Allow op like:  +=  %>  -*  =<>  ::=  -:>>  |=  :<=  ...
         begin
           Ch:=SubString[I];
-          if not (Ch in MathOp3+CompOp2+[':','!']) then break;
+          if not (Ch in MathOp3+CompOp2+[':','!','.']) then break;
           StrValue:=StrValue+Ch;
           Inc(I);
         end;
@@ -2809,7 +3134,7 @@ begin
           Inc(i,2);
         end
         else begin
-          while i<=EndPos do
+          while true do
           begin
             if SubString[I]<>'/' then break;
             StrValue:=StrValue+'/';
@@ -2817,9 +3142,9 @@ begin
           end;
           if Length(StrValue)>=2 then  //  '//' or more...
           begin
-            while i<=EndPos do
+            while true do
             begin
-              if SubString[I] in [#13,#10] then break;
+              if SubString[I] in [#13,#10,#0] then break;
               Inc(i);
             end;
             continue;
@@ -2836,24 +3161,28 @@ begin
         begin
           OriLv:=JLevel;
           JLevel:=FuncLevel;
-          if LevelOpCh[JLevel]=OpCh_None then  //逗号
+          if Levels[JLevel].OpCh=OpCh_None then  //逗号
           begin
-            JSONObject(JObjs[JLevel]).Put(JEP_Operator,'(');
-            LevelOpCh[JLevel]:='(';
-            Dec(LevelBC[JLevel]);
+            with Levels[JLevel] do
+            begin
+              JSONObject(Obj).Put(JEP_Operator,'(');
+              OpCh:='(';
+              Rank:=OpRank['('];
+              Dec(BC);
+            end;
           end
-          else if LevelBC[JLevel]=BlockCnt then  //... ? ( A ? B , ...
+          else if (Levels[JLevel].BC=BlockCnt) and (Levels[JLevel].OpCh<>'[') then  //... ? ( A ? B , ...
           begin  //将纯括号内部的表达式提升到括号的内部
             AddOp('(',amOperator,true);
-            Dec(LevelBC[JLevel]);
+            Dec(Levels[JLevel].BC);
           end
-          else if LevelBC[JLevel]<BlockCnt then
+          else if Levels[JLevel].BC<BlockCnt then
           begin
             //逗号位于括号内部，并且括号外的操作符不是一般函数（无论单目还是双目算子，右侧都不会有多个参数)
             // -- 将括号内的内容做为集合处理
             JLevel:=OriLv;
             JLevel:=ExprLevel;
-            with JSONObject(JObjs[JLevel]) do
+            with JSONObject(Levels[JLevel].Obj) do
             begin
               StrValue:=OptString(JEP_Operator);
               if StrValue='' then
@@ -2869,13 +3198,13 @@ begin
         end;
         '(':
         begin
-          if JLevel>=High(JObjs) then break;  //强制跳出
+          if JLevel>=MaxJETreeLevel then break;  //强制跳出
           Inc(BlockCnt);
           if FuncName<>'' then  //函数调用
           begin
             AddOp(FuncName,amFunc);
             FuncName:='';
-            LevelBC[JLevel]:=BlockCnt-1;
+            Levels[JLevel].BC:=BlockCnt-1;
           end
           else
             AddOp('',amBlock);
@@ -2883,10 +3212,9 @@ begin
           FuncName:='';
           ExprStart:=true;
         end;
-        ')':
+        ')',']':
         begin
-          JLevel:=BlockLevel; //FuncLevel;
-          if JLevel<0 then JLevel:=0;
+          JLevel:=BlockLevel;
           Dec(BlockCnt);
           Inc(I);
           FuncName:='';
@@ -2894,22 +3222,19 @@ begin
         end;
         '[':  //数组下标
         begin
+          if JLevel>=MaxJETreeLevel then break;  //强制跳出
           Inc(BlockCnt);
-          AddOp(Ch,amBlockOp,true);
-          LevelBC[JLevel]:=BlockCnt-1;
+          if ExprStart then  // ? := [ ...
+          begin
+            AddOp(Ch,amBlockOp,false);
+            WriteEmpty;  //写入第一个参数（ '[' 函数的第一个参数是左部 ）
+          end
+          else  // ? [ ...
+            AddOp(Ch,amBlockOp,true);
+          Levels[JLevel].BC:=BlockCnt-1;
           Inc(I);
           FuncName:='';
           ExprStart:=true;
-        end;
-        ']':
-        begin
-          JLevel:=BlockLevel;
-          if JLevel<0 then
-            JLevel:=0;
-          Dec(BlockCnt);
-          Inc(I);
-          FuncName:='';
-          ExprStart:=false;
         end;
         '!','~':
         begin
@@ -2976,7 +3301,7 @@ begin
             else begin  //非关键字
               if not WriteVar(StrValue) then  //将第二个 "变量" 当成操作符
               begin
-                if JLevel>=High(JObjs) then break;  //强制跳出
+                if JLevel>=MaxJETreeLevel then break;  //强制跳出
                 AddOp(FuncName,amOperator,true);
               end;
               FuncName:='';
@@ -3031,7 +3356,7 @@ begin
       end;
     end;
   end;
-  Result:=JSONObject(JObjs[0]);
+  Result:=JSONObject(Levels[0].Obj);
   if POutExprLen<>nil then
     POutExprLen^:=i;
 end;
@@ -3118,10 +3443,20 @@ begin
   if IsCommonFunc or (ParentOpRank<0) then
     OpRk:=-1
   else
-    OpRk:=OpRank[C1];
+    OpRk:=GetStdOpRank(C1,Func);
   //Perfix expression like 'public final function Foo(A,B)'
   if C1=' ' then
   begin
+    if Length(Func)=1 then  //  include 'aaa.inc'  => {op:" ",p1:xx,p2:yy}
+    begin
+      with AObj do
+      begin
+        Result:=J2Str(Opt(JEP_Param1));
+        for i:=2 to Length-1 do
+          Result:=Result+' '+J2Str(Opt(JEP_ParamHeader+IntToStr(i)));
+      end;
+      exit;
+    end;
     Z:=AObj.Opt(JEP_Perfix);
     if Z is JSONArray then
     begin
@@ -3163,7 +3498,7 @@ begin
     end
     else
       Result:=Result+' '+Func+' ';
-    Z:=AObj.Opt(JEP_ParamHeader+'2');
+    Z:=AObj.Opt(JEP_Param2);
     if OpRk>=0 then
     begin
       //当第二个语句与父节点优先级相同时，应当使用括号 -- 主动提高父节点优先级
@@ -3196,7 +3531,10 @@ begin
   else begin
     if C1='[' then   // A[1]  =>  [,A,1
     begin
-      Result:=Result+'[';
+      if Z<>CNULL then  //2011-09-25
+        Result:=Result+'['
+      else
+        Result:='[';
       with AObj do
         for i:=2 to Pred(Length) do
         begin
@@ -3210,92 +3548,6 @@ begin
       with AObj do
         for i:=2 to Pred(Length) do
           Result:=Result+','+J2Str(Opt(JEP_ParamHeader+IntToStr(i)));
-    end;
-    Result:='('+Result+')';
-    if Func<>'(' then  //集合以 "(" 做为操作符
-      Result:=Func+Result;
-  end;
-end;
-
-function TJSONExprParser.JSONToExpr2(AObj: JSONObject;
-  const Ident: Integer; ParentOpRank: Integer): String;
-var
-  Func:String;
-  IsCommonFunc:Boolean;
-  OpRk:Integer;
-  function J2Str(Z: TZAbstractObject):String;
-  var
-    v:Variant;
-  begin
-    if Z=nil then
-    begin
-      Result:='';
-      exit;
-    end;
-    if Z.ClassType=JSONObject then
-    begin
-      if IsCommonFunc then  //只有一个参数的普通函数自带括号了
-      begin
-        if ParentOpRank<0 then
-          Result:=JSONToExpr(JSONObject(Z),ParentOpRank)
-        else
-          Result:=JSONToExpr(JSONObject(Z),0)
-      end
-      else
-        Result:=JSONToExpr(JSONObject(Z),OpRk);
-    end
-    else begin
-      Result:=Z.toString;
-      if (Result<>'') and (Z.ClassType=_String) then
-      begin
-        if Result[1]=JEP_StrParamHeader then  //String
-          Result:=QuotedStr(Copy(Result,2,MaxInt))
-        else begin //Var Name
-          if (VarHelper<>nil) and VarHelper.GetVar(Result,v) then
-          begin
-            Result:=VarToExprStr(v);
-          end;
-        end;
-      end;
-    end;
-  end;
-var
-  i:Integer;
-begin
-  Result:='';
-  if AObj=nil then exit;
-  Func:=AObj.OptString(JEP_Operator);
-  IsCommonFunc:=(Func='') or not ((Func[1] in MathOp2+CompOp2+['.']+MathOp1) or (Func='AND') or (Func='OR') or (Func='IN') or (Func='IS') or (Func='XOR'));
-  if IsCommonFunc or (ParentOpRank<0) then
-    OpRk:=-1
-  else
-    OpRk:=OpRank[Func[1]];
-  Result:=J2Str(AObj.Opt(JEP_Param1));
-  if Func='' then exit;
-  if (Func[1] in MathOp2+CompOp2+['.']+MathOp1) or (Func='AND') or (Func='OR') or (Func='IN') or (Func='IS') or (Func='XOR') then
-  begin
-    if Func[1] in MathOp2+CompOp2+['.'] then
-      Result:=Result+Func
-    else if Func[1] in MathOp1 then
-    begin
-      Result:=Func+Result;
-      if (ParentOpRank<0) or (OpRk<ParentOpRank) then
-        Result:='('+Result+')';
-      exit;
-    end
-    else
-      Result:=Result+' '+Func+' ';
-    Result:=Result+J2Str(AObj.Opt(JEP_ParamHeader+'2'));
-    if (ParentOpRank<0) or (OpRk<ParentOpRank) then
-      Result:='('+Result+')';
-  end
-  else begin
-    for i:=2 to Pred(AObj.Length) do
-      Result:=Result+','+J2Str(AObj.Opt(JEP_ParamHeader+IntToStr(i)));
-    if Func[1]='[' then
-    begin
-      Result:='['+Result+']';
-      exit;
     end;
     Result:='('+Result+')';
     if Func<>'(' then  //集合以 "(" 做为操作符
@@ -3463,7 +3715,7 @@ end;
 
 class function TJSONExprParser.Version: ShortString;
 begin
-  Result:='0.4.1';
+  Result:='0.4.2';
 end;
 
 { TJEVarHelper }
@@ -4137,6 +4389,14 @@ end;
 function TMemVarHelper.Sorted: Boolean;
 begin
   Result:=FTypes<>nil;
+end;
+
+{ TExitException }
+
+constructor TExitException.CreateVal(V: Variant);
+begin
+  inherited Create('RET');
+  ReturnVal:=V;
 end;
 
 initialization

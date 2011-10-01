@@ -48,8 +48,29 @@ begin
   DebugMsg:=DebugMsg+'[V]'+VarName+':='+VarToStrDef(Val,'N/A')+#13#10;
 end;
 
+function CheckParseText(const Text: String; var Msg: String;
+  AParser: TJSONExprParser):Boolean;
+var
+  J:JSONObject;
+  s1:String;
+begin
+  Result:=true;
+  J:=AParser.ExprToJSON(Text);
+  with J do
+  begin
+    s1:=AParser.JSONToExpr(J,0);
+    if s1<>Text then
+    begin
+      Result:=false;
+      Msg:=Msg+#13#10+Text+' => '+s1;
+    end;
+    Free;
+  end;
+end;
+
 function TestJSONExprParser(out Msg: String): Boolean;
 var
+  AParser: TJSONExprParser;
   VHelper:TSimpleVarHelper;
   J:JSONObject;
   mstr,mstr2,s1,s2:String;
@@ -60,7 +81,8 @@ begin
   Msg:='';
   Result:=true;
   VHelper:=TSimpleVarHelper.Create;
-  with TJSONExprParser.Create do
+  AParser:=TJSONExprParser.Create;
+  with AParser do
   begin
     AddVarHelper(VHelper);
     //Expr Parse Test
@@ -312,50 +334,30 @@ begin
       end;
       Free;
     end;
+    mstr:='include ''AAA.asp'';include ''const.asp'';DIM i';
+    if not CheckParseText(mstr,Msg,AParser) then Result:=false;
+    mstr:='1..2.34';   //Range
+    if not CheckParseText(mstr,Msg,AParser) then Result:=false;
     mstr:='A(1,(B,C))';  //参数中的集合  2011-09-23
-    J:=ExprToJSON(mstr);
-    if JSONToExpr(J,0)<>mstr then
-    begin
-      Result:=false;
-      Msg:=Msg+#13#10+mstr+' => '+JSONToExpr(J,0);
-    end;
-    J.Free;
+    if not CheckParseText(mstr,Msg,AParser) then Result:=false;
+    mstr:='A:=[1,(2+3)*4,5+B[6],7]';  //2011-09-24
+    if not CheckParseText(mstr,Msg,AParser) then Result:=false;
+    mstr:='DEAL(Map[1][2])';  //2011-09-25
+    if not CheckParseText(mstr,Msg,AParser) then Result:=false;
+    mstr:='LOG(FLY();A[1]:=2)';  //2011-09-25
+    if not CheckParseText(mstr,Msg,AParser) then Result:=false;
     mstr:='(A,B,C).FUNC1(D[1],E.F)';
-    J:=ExprToJSON(mstr);
-    if JSONToExpr(J,0)<>mstr then
-    begin
-      Result:=false;
-      Msg:=Msg+#13#10+mstr+' => '+JSONToExpr(J,0);
-    end;
-    J.Free;
-    mstr:='B-=(A++)';
-    J:=ExprToJSON(mstr);
-    if JSONToExpr(J,0)<>mstr then
-    begin
-      Result:=false;
-      Msg:=Msg+#13#10+mstr+' => '+JSONToExpr(J,0);
-    end;
-    J.Free;
+    if not CheckParseText(mstr,Msg,AParser) then Result:=false;
+    mstr:='B-=A++';
+    if not CheckParseText(mstr,Msg,AParser) then Result:=false;
     mstr:='A[1][2+3*4,B[5].C(6,D)]';
-    J:=ExprToJSON(mstr);
-    if JSONToExpr(J,0)<>mstr then
-    begin
-      Result:=false;
-      Msg:=Msg+#13#10+mstr+' => '+JSONToExpr(J,0);
-    end;
-    J.Free;
-    mstr:='PUBLIC VIRTUAL FUNCTION ADD2(A,B):=(A+B)';
-    J:=ExprToJSON(mstr);
-    with J do
-    begin
-      s1:=JSONToExpr(J);
-      if s1<>mstr then
-      begin
-        Result:=false;
-        Msg:=Msg+#13#10+mstr+' => '+s1;
-      end;
-      Free;
-    end;
+    if not CheckParseText(mstr,Msg,AParser) then Result:=false;
+    mstr:='PUBLIC VIRTUAL FUNCTION ADD2(A,B):=A+B;';
+    if not CheckParseText(mstr,Msg,AParser) then Result:=false;
+    mstr:='PROCEDURE TPlane.FLY(CONST Aim:OBJECT,OUT Cost)';
+    if not CheckParseText(mstr,Msg,AParser) then Result:=false;
+    mstr:='FOO(X;OUT VAR Y)';
+    if not CheckParseText(mstr,Msg,AParser) then Result:=false;
     Free;
   end;
   //Eval Test
@@ -386,6 +388,16 @@ begin
     J:=ExprToJSON(mstr);
     v:=Eval(J);
     if not v then
+    begin
+      Result:=false;
+      Msg:=Msg+#13#10+(mstr+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
+    end;
+    J.Free;
+    UseVarHelperOnParse:=false;
+    mstr:='i:=0;c:=0;n:=Times(10,i+=4;ifelse(i%3=0,continue,i>30,break);c++;i++));c*=n';
+    J:=ExprToJSON(mstr);
+    v:=Eval(J);
+    if v<>21 then
     begin
       Result:=false;
       Msg:=Msg+#13#10+(mstr+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
@@ -559,7 +571,7 @@ begin
     J.Free;
     DebugMsg:='';
     //String expression, Special variable name.
-    mstr:='Str  ''~1'':=#13#10''Hello World!''#9; 字符串2:=''你好'' #32+''世界'' ''!''; Result:=Len(Str''~1'')>Len(字符串2);';
+    mstr:='"Str~1":=#13#10''Hello World!''#9; 字符串2:=''你好'' #32+''世界'' ''!''; Result:=Len("Str~1")>Len(字符串2);';
     J:=ExprToJSON(mstr);
     try
       v:=Eval(J);
