@@ -128,11 +128,37 @@ ver 0.4.1  By creation_zy  (无尽愿)
     case(A,B,F1(),C,F2(),D,F3(),E)
   Support ++ and -- operator like:  A++  B--
 
-2011-10-01
-var 0.4.2  By creation_zy  (无尽愿)
+2011-10-03
+ver 0.4.2  By creation_zy  (无尽愿)
   Add "continue", "Reverse", "Pred", "Succ", "return".
   Some bug fixed.
   Some statement can convert to Pascal with TJETransPascal.
+    Like:
+      IF(X<100,Y:=X,Y:=X-100;Z:=X*Y);
+      X*=1+IF(A<B,IF(B,100,0.5)*1.5,IF(A<>C,2,4+5));
+
+2011-12-20
+  Add "Loop", "WhileNot", "ForTo", "ForEach"
+  Add "Echo"
+  Add Level parameter to Break and Continue
+  Add operator "+>" to join string, "==" to Type&Val compare.
+
+2012-02-19
+  Remove "IFELSE"
+  Add "IIF" -- if statement return value. Old if statement will not return val now.
+
+2012-03-19
+  Add "NOWTIME"
+
+2012-05-30
+  Add "NEW"
+
+2012-06-17
+  Add "NOWDATE"
+
+2012-06-17
+ver 0.5.0  By creation_zy
+  Bug fix for "multi block end" which found by rinospro@gmail.com.
 }
 
 unit UJSONExpr;
@@ -158,42 +184,82 @@ const
   JEP_Operator='op';
   JEP_Name='pn';
   JEP_Perfix='p0';
+  JEP_LanDef='p_';  //决定一个分支下的基础语言
   JEP_Type='tp';
   JEP_Body='pb';
   JEP_ParamHeader='p';
   JEP_Param1='p1';
   JEP_Param2='p2';
   JEP_Param3='p3';
+  JEP_Param4='p4';
   JEP_StrParamHeader='''';    //为了将字符串与变量名相区别，所有字符串值均带单引号前缀
+  JEP_TypeHead='?';           //十六进制、八进制、二进制、日期、时间等类型的头部标识
+  JEPT_Hex='H';
+  JEPT_Oct='O';
+  JEPT_Bin='B';
+  JEPT_Date='d';
+  JEPT_Time='t';
+  JEPT_DateTime='D';
+  JEPT_EchoStr='E';           //如ASP中 %>  <% 之间的部分
+  JEPT_EmptyItem=' ';         //空语素，用于前置算子的表示，如 --A 转化为 ?e -- A
+  JE_EmptyItemStr=JEP_TypeHead+JEPT_EmptyItem;
   JEP_VarTag='"';             //支持由"包围的变量名，如 "No.1 Var", ":-)", "He ""!""" ——变量名不能以'开头
   JEP_BodyDefOp=':=';         //  Add(x,y):=(x+y);
   JEP_Class='class';          //  TFoo:Class(TObject)::=(Name:String; ID:Int);
+  //Standard Operators
+  JEOP_StrJoin='+>';
   //Standart Functions
   JEF_Between='BETWEEN';
   JEF_Break='BREAK';
   JEF_Case='CASE';
   JEF_Continue='CONTINUE';
   JEF_Dec='DEC';
+  JEF_Echo='ECHO';
   JEF_Eval='EVAL';            //表达式求值
   JEF_Exit='EXIT';
-  JEF_For='FOR';
+  JEF_For='FOR';              // for(i:=0,i<=10,i+=2,n+=i)
+  JEF_ForEach='FOREACH';      // foreach(i,MyArray,n+=i)
+  JEF_ForTo='FORTO';          // forto(i:=0,10,2,n+=i)
   JEF_If='IF';
+  JEF_IIf='IIF';
   JEF_Is='IS';
-  JEF_IfElse='IFELSE';
+  //JEF_IfElse='IFELSE';
   JEF_Inc='INC';
+  JEF_Include='INCLUDE';
   JEF_IsArray='ISARRAY';
   JEF_IsNull='ISNULL';
   JEF_Len='LEN';
+  JEF_Loop='LOOP';            // Loop ... While BoolExpr
+  JEF_New='NEW';
   JEF_Pred='PRED';
   JEF_Print='PRINT';
-  JEF_Repeat='REPEAT';
+  JEF_Repeat='REPEAT';        // Repeat ... Until BoolExpr
   JEF_Reverse='REVERSE';
   JEF_Return='RETURN';
   JEF_Succ='SUCC';
   JEF_Times='TIMES';
   JEF_Wait='WAIT';
-  JEF_While='WHILE';
+  JEF_While='WHILE';          // While BoolExpr ...
+  JEF_WhileNot='WHILENOT';    // While NOT BoolExpr ...
+  //定义相关关键字
+  JED_HeadChar=' ';
+  JED_Proc='PROCEDURE';         //方法
+  JED_Func='FUNCTION';          //函数
+  JED_Class='CLASS';            //类
+  JED_Space='SPACE';            //空间
+  JED_Var='VAR';                //变量
+  JED_Const='CONST';            //常量
+  JEDN_Members='MEMBERS';       //成员(类或空间的)
+  JEDN_Params='PARAMS';         //参数表(方法的)
+  JEDN_Body='BODY';             //主体(方法的)
+  JEDN_As='AS';                 //类型标识
+  JEDN_Extend='EXTEND';         //继承(类型)
+  JEDN_Implement='IMPLEMENT';   //实现(接口)
+  JEV_Result='RESULT';          //返回值(变量)
+  JEV_ResultRep='ResulT';       //用于代换的 返回值(变量)
+  OpRank_Func:Byte=255;
   //Std chars
+  Digits: set of Char=['0'..'9'];
   VarBegin: set of Char=['a'..'z', 'A'..'Z', '_', '$', '@', #129..#254];  //允许$,@以及汉字
   VarBody: set of Char=['a'..'z', 'A'..'Z', '_', '$', '@', '0'..'9', #129..#254];
   MathOp1: set of Char=['!', '~'];  //单目运算符
@@ -240,6 +306,7 @@ type
     FOpHelper: TJEOpHelper;
     FUseVarHelperOnTextGen: Boolean;
     FUseVarHelperOnParse: Boolean;
+    FEchoFunc: TPrintFunc;
     procedure SetOnLineComplete(const Value: TTraceLineFunc);
     procedure SetTraceOnLine(const Value: Boolean);
     procedure SetPrintFunc(const Value: TPrintFunc);
@@ -247,6 +314,8 @@ type
     procedure SetOpHelper(const Value: TJEOpHelper);
     procedure SetUseVarHelperOnParse(const Value: Boolean);
     procedure SetUseVarHelperOnTextGen(const Value: Boolean);
+    procedure SetEchoFunc(const Value: TPrintFunc);
+    function TypeStrToVar(const Str: String):Variant;
   public
     property VarHelper: TJEVarHelper read FVarHelper;
     property FuncHelper: TJEFuncHelper read FFuncHelper;
@@ -260,6 +329,7 @@ type
     property OnLineComplete:TTraceLineFunc read FOnLineComplete write SetOnLineComplete;
     property VarToStrDefFunc:TVarToStrDefFunc read FVarToStrDefFunc write SetVarToStrDefFunc;
     property PrintFunc:TPrintFunc read FPrintFunc write SetPrintFunc;
+    property EchoFunc:TPrintFunc read FEchoFunc write SetEchoFunc;
     function Eval(AObj: TZAbstractObject):Variant;
     function EvalNumber(AObj: TZAbstractObject; out Val:Double):Boolean;
     function OptimizeJSON(AObj: JSONObject):JSONObject;
@@ -448,8 +518,14 @@ implementation
 
 type
   TVarAy=array of Variant;
-  TBreakException=class(Exception) end;
-  TContinueException=class(Exception) end;
+  TBreakException=class(Exception)
+    Level:Integer;
+    constructor Create(Lv:Integer=1);
+  end;
+  TContinueException=class(Exception)
+    Level:Integer;
+    constructor Create(Lv:Integer=1);
+  end;
   TExitException=class(Exception)
     ReturnVal: Variant;
     constructor CreateVal(V: Variant);
@@ -460,7 +536,6 @@ threadvar
 const
   OpCh_None:TOpChar=#0;
   OpCh_Func:TOpChar=#255;
-  Digits: set of Char=['0'..'9'];
   NumVarTypes: set of Byte=[varSmallint,varInteger,varSingle,varDouble,varCurrency,varByte,varWord,varLongWord];
 
 function Obj2Var(O: TObject): Variant;
@@ -477,11 +552,52 @@ begin
     Result:=nil;
 end;
 
+function OctToInt(const S: String): Integer;
+const OctMap:array [Char] of SmallInt =
+  (
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+    0, 1, 2, 3, 4, 5, 6, 7,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1
+   );
+var
+  i, n: Integer;
+begin
+  n:=Length(S);
+  Result:=0;
+  for i:=n downto 1 do
+    Result:=Result*8+OctMap[S[i]];
+end;
+
+function BinToInt(const S: String): Integer;
+var
+  i: Integer;
+begin
+  Result:=0;
+  for i:=Length(S) downto 1 do
+    if S[i]='1' then
+      Result:=Result*2+1
+    else
+      Result:=Result*2;
+end;
+
 procedure InitOpRank;
 var
   r:Byte;
 begin                                                     
-  OpRank[OpCh_Func]:=255;  //Function
+  OpRank[OpCh_Func]:=OpRank_Func;  //Function
   r:=240;
   OpRank['(']:=r; OpRank['[']:=r; OpRank['.']:=r; Dec(r,20);
   OpRank['!']:=r; OpRank['~']:=r; OpRank['N']:=r; Dec(r,20);  //NOT
@@ -962,6 +1078,17 @@ function TJSONExprParser.Eval(AObj: TZAbstractObject): Variant;
         Result[i]:=GetPN(i);
     end;
   end;
+  function GetP1Left:TZAbstractObject;
+  begin
+    Result:=JSONObject(AObj).Opt(JEP_Param1);
+    if Result=nil then exit;
+    if not (Result is JSONObject) then 
+    begin
+      Result:=nil;
+      exit;
+    end;
+    Result:=JSONObject(Result).Opt(JEP_Param1);
+  end;
   function Func_IN:Boolean;
   var
     i:Integer;
@@ -1073,51 +1200,56 @@ function TJSONExprParser.Eval(AObj: TZAbstractObject): Variant;
       end;
     end;
   end;
-  procedure SetValue(Val: Variant; const PName: String=JEP_Param1);
+  procedure SetVal(Z: TZAbstractObject; Val: Variant; const PName: String=JEP_Param1);
   var
-    Z,Z2:TZAbstractObject;
+    Z2:TZAbstractObject;
     mstr:String;
   begin
     Result:=Val;  //将右侧表达式的值做为整个赋值过程的值
-    Z:=JSONObject(AObj).Opt(PName);
+    if Z.ClassType=_String then
     begin
-      if Z.ClassType=_String then
+      mstr:=Z.toString;
+      if mstr='' then exit;
+      if not (mstr[1] in [JEP_StrParamHeader,JEP_TypeHead]) then
+        VarHelper.SetVar(mstr,Result);
+    end
+    else if Z.ClassType=JSONObject then  //赋值表达式的左部是复合表达式  2010-04-04
+    begin
+      mstr:=JSONObject(Z).ValByIndex[0];
+      if mstr='.' then
       begin
-        mstr:=Z.toString;
-        if mstr='' then exit;
-        if mstr[1]<>JEP_StrParamHeader {in VarBegin} then
-          VarHelper.SetVar(mstr,Result);
-      end
-      else if Z.ClassType=JSONObject then  //赋值表达式的左部是复合表达式  2010-04-04
-      begin
-        mstr:=JSONObject(Z).ValByIndex[0];
-        if mstr='.' then
+      {$IFDEF NO_COMPLEXOBJ}
+      {$IFNDEF NO_RECMEMBER}
+        VarHelper.SetVar2(JSONObject(Z),Result);
+      {$ENDIF}
+      {$ELSE}
+        Z2:=JSONObject(Z).Opt(JEP_Param1);
+        if Z2 is _String then
         begin
-        {$IFDEF NO_COMPLEXOBJ}
-        {$IFNDEF NO_RECMEMBER}
-          VarHelper.SetVar2(JSONObject(Z),Result);
-        {$ENDIF}
-        {$ELSE}
-          Z2:=JSONObject(Z).Opt(JEP_Param1);
-          if Z2 is _String then
+          with VarHelper do
           begin
-            with VarHelper do
+            if EnterObj(Z2.toString) then
             begin
-              if EnterObj(Z2.toString) then
-              begin
-                SetVar(JSONObject(Z).OptString(JEP_Param2),Result);
-                LeaveObj('');
-              end;
+              SetVar(JSONObject(Z).OptString(JEP_Param2),Result);
+              LeaveObj('');
             end;
-          end
-          else if Z2 is JSONObject then
-          begin
-          
           end;
-        {$ENDIF}
+        end
+        else if Z2 is JSONObject then
+        begin
+
         end;
+      {$ENDIF}
       end;
     end;
+  end;
+  procedure SetValue(Val: Variant; const PName: String=JEP_Param1);
+  begin
+    SetVal(JSONObject(AObj).Opt(PName),Val);  //将右侧表达式的值做为整个赋值过程的值
+  end;
+  procedure IncVal(AObj: TZAbstractObject; Val: Variant);
+  begin
+    SetVal(AObj,Eval(AObj)+Val);
   end;
   function DoEval(const ExprStr: String):Variant;
   var
@@ -1144,8 +1276,8 @@ var
   OutSet:TParamSet;
   Done:Boolean;
   Z,Z2:TZAbstractObject;
-  ParamCnt,i,n,c:Integer;
-  w1,w2,w3,w4,w5,w6:Word;
+  ParamCnt,i,n,c,EndVal,StepVal:Integer;
+  w1,w2,w3,w4,w5,w6,w7:Word;
 begin
   Result:=Null;
   if AObj=nil then exit;
@@ -1154,13 +1286,15 @@ begin
     if AObj.ClassType=_String then
     begin
       mstr:=_String(AObj).toString;
-      if (mstr<>'') and (mstr[1]<>JEP_StrParamHeader) then  //变量名
+      if (mstr<>'') and not (mstr[1] in [JEP_StrParamHeader,JEP_TypeHead]) then  //变量名
       begin
         if VarHelper<>nil then
           VarHelper.GetVar(mstr,Result);
       end
-      else  //加了前缀的字符串，此时应当去掉前缀
-        Result:=Copy(mstr,2,MaxInt);
+      else if mstr[1]=JEP_StrParamHeader then //加了前缀的字符串，此时应当去掉前缀
+        Result:=Copy(mstr,2,MaxInt)
+      else
+        Result:=TypeStrToVar(mstr);
     end
     else if AObj.ClassType=_Boolean then
       Result:=_Boolean(AObj).boolValue
@@ -1423,6 +1557,14 @@ begin
             Result:=v1<=GetP2
           else if Func='<>' then
             Result:=v1<>GetP2
+          else if Func='==' then  //2011-12-31
+          begin
+            v2:=GetP2;
+            if VarType(v1)=VarType(v2) then
+              Result:=v1=v2
+            else
+              Result:=false;
+          end
           else if Func='>>' then
             Result:=Integer(v1) shr Integer(GetP2)
           else if Func='<<' then
@@ -1432,6 +1574,13 @@ begin
         end
         else begin
           case Func1 of
+            '+':
+            begin
+              if Func[2]='>' then  //+>  String join
+                Result:=String(GetP1)+String(GetP2)
+              else
+                Done:=false;
+            end;
           {$IFNDEF NO_ASSIGNMENT}
             ':':
             begin
@@ -1450,12 +1599,33 @@ begin
               {$IFNDEF NO_IF}
                 'F': //IF
                 begin
+                  Result:=Null;
                   v1:=GetP1;
                   if VarType(v1)=varBoolean then
+                  begin
                     if Boolean(v1) then
-                      Result:=GetP2
-                    else
-                      Result:=GetP3;
+                      GetP2
+                    else if ParamCnt<=3 then  // if(b1,v2,v3)
+                      GetP3
+                    else begin // if(b1,v2,b3,v4...)
+                      i:=3;
+                      while i<ParamCnt do
+                      begin
+                        v1:=GetPN(i);
+                        if VarType(v1)=varBoolean then
+                          if Boolean(v1) then
+                          begin
+                            GetPN(i+1);
+                            i:=-1;  //避免break后被当成没有匹配成功
+                            break;
+                          end;
+                        Inc(i,2);
+                      end;
+                      //最后一个ELSE
+                      if i=ParamCnt then
+                        GetPN(i);
+                    end;
+                  end;
                 end;
               {$ENDIF}
                 'N': //IN
@@ -1504,7 +1674,7 @@ begin
               n:=0;
               try
                 GetP1;  //Init
-                while VarEqual(GetP3,true) do  //Check
+                while VarEqual(GetP2,true) do  //Check
                 begin
                   Inc(n);
                   try
@@ -1512,9 +1682,11 @@ begin
                   except
                     on e:TContinueException do
                     begin
+                      if e.Level>1 then
+                        raise TContinueException.Create(e.Level-1);
                     end;
                   end;
-                  GetP2;    // Inc(i)
+                  GetP3;    // Inc(i)
                 end;
               except
                 on e:TExitException do
@@ -1523,6 +1695,8 @@ begin
                 end;
                 on e:TBreakException do
                 begin
+                  if e.Level>1 then
+                    raise TBreakException.Create(e.Level-1);
                 end;
               end;
               Result:=n;
@@ -1534,6 +1708,36 @@ begin
               SetValue(GetP1+1)
             else if Func='INT' then  //2010-08-11
               Result:=Integer(GetP1)
+            else if Func='IIF' then  //2012-02-19
+            begin
+              Result:=Null;
+              v1:=GetP1;
+              if VarType(v1)=varBoolean then
+              begin
+                if Boolean(v1) then
+                  Result:=GetP2
+                else if ParamCnt<=3 then  // iif(b1,v2,v3)
+                  Result:=GetP3
+                else // ParamCnt>3    iif(b1,v2,b3,v4.....)
+                begin
+                  i:=3;
+                  while i<ParamCnt do
+                  begin
+                    v1:=GetPN(i);
+                    if VarType(v1)=varBoolean then
+                      if Boolean(v1) then
+                      begin
+                        Result:=GetPN(i+1);
+                        i:=-1;  //见if
+                        break;
+                      end;
+                    Inc(i,2);
+                  end;
+                  if i=ParamCnt then
+                    Result:=GetPN(i);
+                end;
+              end;
+            end
             else
               Done:=false;
           'L':
@@ -1573,36 +1777,45 @@ begin
               begin
                 mstr:=v1;
                 if mstr<>'' then
+                begin
                   case mstr[1] of
                     'D','d':
                     begin
-                      DecodeDate(Result,w1,w2,w3);
-                      Result:=EncodeDate(w1,w2,w3);
+                      Result:=Trunc(Result);
                     end;
-                    'M':
+                    'M','m':
                     begin
                       DecodeDate(Result,w1,w2,w3);
                       Result:=EncodeDate(w1,w2,1);
                     end;
-                    'Y':
+                    'Y','y':
                     begin
                       DecodeDate(Result,w1,w2,w3);
                       Result:=EncodeDate(w1,1,1);
                     end;
                     'H','h':
                     begin
-                      DecodeDate(Result,w1,w2,w3);
                       DecodeTime(Result,w4,w5,w5,w5);
-                      Result:=EncodeDate(w1,w2,w3)+EncodeTime(w4,0,0,0);
+                      Result:=Trunc(Result)+EncodeTime(w4,0,0,0);
                     end;
-                    'm':
+                    'N','n':
                     begin
-                      DecodeDate(Result,w1,w2,w3);
                       DecodeTime(Result,w4,w5,w6,w6);
-                      Result:=EncodeDate(w1,w2,w3)+EncodeTime(w4,w5,0,0);
+                      Result:=Trunc(Result)+EncodeTime(w4,w5,0,0);
+                    end;
+                    'S','s':
+                    begin
+                      DecodeTime(Result,w4,w5,w6,w7);
+                      Result:=Trunc(Result)+EncodeTime(w4,w5,w6,0);
                     end;
                   end;
+                  Result:=TDateTime(Result);
+                end;
               end;
+            end
+            else if Func='NEW' then  //2012-05-30
+            begin
+              raise Exception.Create('Not implemented!');
             end
             else
               Done:=false;
@@ -1653,13 +1866,51 @@ begin
             else
               Done:=false;
           'E':
-            if Func=JEF_Eval then  //2011-09-03
+            if Func=JEF_Echo then  //2011-09-03
+            begin
+              if Assigned(EchoFunc) then
+                EchoFunc(GetP1);
+              Result:=0;
+            end
+            else if Func=JEF_Eval then  //2011-09-03
             begin
               Result:=DoEval(GetP1);
             end
             else if Func=JEF_Exit then  //2011-09-03
             begin
               raise TExitException.Create('');
+            end
+            else
+              Done:=false;
+          'L':
+            if Func=JEF_Loop then
+            begin
+              n:=0;
+              try
+                repeat
+                  Inc(n);
+                  try
+                    GetP1;
+                  except
+                    on e:TContinueException do
+                    begin
+                      if e.Level>1 then
+                        raise TContinueException.Create(e.Level-1)
+                      else
+                        continue;
+                    end;
+                  end;
+                until not VarEqual(GetP2,true);
+              except
+                on e:TExitException do
+                  raise TExitException.Create('');
+                on e:TBreakException do
+                begin
+                  if e.Level>1 then
+                    raise TBreakException.Create(e.Level-1);
+                end;
+              end;
+              Result:=n;
             end
             else
               Done:=false;
@@ -1702,7 +1953,11 @@ begin
           'B':
             if Func=JEF_Break then
             begin
-              raise TBreakException.Create(''); // Abort;  //产生哑异常，跳出循环结构
+              Z:=JSONObject(AObj).Opt(JEP_Param1);
+              if Z=nil then
+                raise TBreakException.Create //跳出循环结构
+              else
+                raise TBreakException.Create(Eval(Z))
             end
             else
               Done:=false;
@@ -1710,6 +1965,43 @@ begin
             if Func='FLOAT' then
             begin
               Result:=Double(GetP1);
+            end
+            else if Func=JEF_ForTo then
+            begin
+              //  forto i:=0 to 100 step 10
+              Z:=GetP1Left;  // Extract variable
+              if Z=nil then exit;
+              n:=0;
+              try
+                GetP1;  //Init
+                EndVal:=GetP2;
+                StepVal:=GetP3;
+                v1:=Eval(Z);
+                while ((StepVal>=0) and (v1<=EndVal) or ((StepVal<0) and (v1>=EndVal))) do  //Check
+                begin
+                  Inc(n);
+                  try
+                    GetPN(4); //Body
+                  except
+                    on e:TContinueException do
+                    begin
+                      if e.Level>1 then
+                        raise TContinueException.Create(e.Level-1);
+                    end;
+                  end;
+                  IncVal(Z,StepVal);
+                  v1:=Eval(Z);
+                end;
+              except
+                on e:TExitException do
+                  raise TExitException.Create('');
+                on e:TBreakException do
+                begin
+                  if e.Level>1 then
+                    raise TBreakException.Create(e.Level-1);
+                end;
+              end;
+              Result:=n;
             end
             else
               Done:=false;
@@ -1741,17 +2033,20 @@ begin
                   except
                     on e:TContinueException do  //2011-09-24
                     begin
-                      continue;
+                      if e.Level>1 then
+                        raise TContinueException.Create(e.Level-1)
+                      else
+                        continue;
                     end;
                   end;
                 end;
               except
                 on e:TExitException do
-                begin
                   raise TExitException.Create('');
-                end;
                 on e:TBreakException do
                 begin
+                  if e.Level>1 then
+                    raise TBreakException.Create(e.Level-1);
                 end;
               end;
               Result:=c;
@@ -1771,17 +2066,20 @@ begin
                   except
                     on e:TContinueException do  //2011-09-24
                     begin
-                      continue;
+                      if e.Level>1 then
+                        raise TContinueException.Create(e.Level-1)
+                      else
+                        continue;
                     end;
                   end;
                 end;
               except
                 on e:TExitException do
-                begin
                   raise TExitException.Create('');
-                end;
                 on e:TBreakException do
                 begin
+                  if e.Level>1 then
+                    raise TBreakException.Create(e.Level-1);
                 end;
               end;
               Result:=n;  //循环结构的返回值就是进入循环体的次数
@@ -1802,6 +2100,7 @@ begin
               if VarIsNull(Result) then
                 Result:=GetP2;
             end
+            {  Deprecated at 2012-02-19
             else if Func=JEF_IfElse then  //2011-09-22
             begin
               v1:=GetP1;
@@ -1826,7 +2125,7 @@ begin
                   if (i=ParamCnt) and VarIsNull(Result) then
                     Result:=GetPN(i);
                 end;
-            end
+            end}
             else
               Done:=false;
           'R':
@@ -1841,7 +2140,10 @@ begin
                   except
                     on e:TContinueException do  //2011-09-24
                     begin
-                      continue;
+                      if e.Level>1 then
+                        raise TContinueException.Create(e.Level-1)
+                      else
+                        continue;
                     end;
                   end;
                 until VarEqual(GetP2,true);
@@ -1852,6 +2154,8 @@ begin
                 end;
                 on e:TBreakException do
                 begin
+                  if e.Level>1 then
+                    raise TBreakException.Create(e.Level-1);
                 end;
               end;
               Result:=n;  //循环结构的返回值就是进入循环体的次数
@@ -1890,6 +2194,22 @@ begin
             end
             else
               Done:=false;
+          'F':
+            if Func=JEF_ForEach then
+            begin
+              Z:=JSONObject(AObj).Opt(JEP_Param1);
+              v2:=GetP2;
+              if VarIsArray(v2) then
+              begin
+                for i:=VarArrayLowBound(v2,1) to VarArrayHighBound(v2,1) do
+                begin
+                  SetVal(Z,v2[i]);
+                  GetP3;
+                end;
+              end;
+            end
+            else
+              Done:=false;
           'I':
             if Func=JEF_IsArray then
             begin
@@ -1908,6 +2228,41 @@ begin
             end
             else
               Done:=false;}
+          'N':
+            if Func='NOWDATE' then  //2012-06-17
+            begin
+              Result:=Date;
+            end
+            else if Func='NOWTIME' then  //2012-03-19
+            begin
+              Result:=GetTime;
+              v1:=GetP1;  //时间取整
+              if not VarIsNull(v1) then
+              begin
+                mstr:=v1;
+                if mstr<>'' then
+                  case mstr[1] of
+                    'H','h':
+                    begin
+                      DecodeTime(Result,w4,w5,w5,w5);
+                      Result:=EncodeTime(w4,0,0,0);
+                    end;
+                    'N','n':
+                    begin
+                      DecodeTime(Result,w4,w5,w6,w6);
+                      Result:=EncodeTime(w4,w5,0,0);
+                    end;
+                    'S','s':
+                    begin
+                      DecodeTime(Result,w4,w5,w6,w7);
+                      Result:=EncodeTime(w4,w5,w6,0);
+                    end;
+                  end;
+              end;
+              Result:=TDateTime(Result);
+            end
+            else
+              Done:=false;
           else
             Done:=false;
         end;
@@ -1918,7 +2273,11 @@ begin
           'C':
             if Func=JEF_Continue then  //2011-09-24
             begin
-              raise TContinueException.Create(''); //产生异常，跳出循环结构
+              Z:=JSONObject(AObj).Opt(JEP_Param1);
+              if Z=nil then
+                raise TContinueException.Create  //产生异常，跳出循环结构
+              else
+                raise TContinueException.Create(Eval(Z));
             end
             else
               Done:=false;
@@ -1926,6 +2285,39 @@ begin
             if Func='DATETIME' then  //2011-09-01
             begin
               Result:=StrToDateTime(GetP1);
+            end
+            else
+              Done:=false;
+          'W':
+            if Func=JEF_WhileNot then
+            begin
+              n:=0;
+              try
+                while not VarEqual(GetP1,true) do
+                begin
+                  Inc(n);
+                  try
+                    GetP2;
+                  except
+                    on e:TContinueException do
+                    begin
+                      if e.Level>1 then
+                        raise TContinueException.Create(e.Level-1)
+                      else
+                        continue;
+                    end;
+                  end;
+                end;
+              except
+                on e:TExitException do
+                  raise TExitException.Create('');
+                on e:TBreakException do
+                begin
+                  if e.Level>1 then
+                    raise TBreakException.Create(e.Level-1);
+                end;
+              end;
+              Result:=n;  //循环结构的返回值就是进入循环体的次数
             end
             else
               Done:=false;
@@ -1963,8 +2355,7 @@ begin
           end;
           SetLength(VParams,0);
         end;
-        else //FuncHelper.GetValue(Self,Func,GetParams(JSONObject(AObj)),Result,OutSet);
-        begin
+        else begin //FuncHelper.GetValue(Self,Func,GetParams(JSONObject(AObj)),Result,OutSet);
           VParams:=GetParams(JSONObject(AObj));
           FuncHelper.GetValue(Self,Func,VParams,Result,OutSet);
           if OutSet<>[] then
@@ -1984,11 +2375,11 @@ begin
     end;
     on e:TBreakException do
     begin
-      raise TBreakException.Create(e.Message);
+      raise TBreakException.Create(e.Level);
     end;
     on e:TContinueException do
     begin
-      raise TContinueException.Create(e.Message);
+      raise TContinueException.Create(e.Level);
     end;
     on e:Exception do
       Result:=Null;
@@ -2282,11 +2673,17 @@ var
   function BlockLevel:Integer;
   begin
     Result:=ExprLevel;
-    while (Result>0) and (Levels[Result].BC=Levels[Result-1].BC) do
+    while Result>0 do  //2012-06-22  Bug fixed
     begin
-      if Levels[Result].BC<BlockCnt then break;      
+      with Levels[Result] do
+        if (BC<BlockCnt) or (BC<Levels[Result-1].BC) then break;
       Dec(Result);
-      if Result<0 then break;
+      if Levels[Result].BC<BlockCnt then
+      begin
+        //一步跨出两层的情况
+        Inc(Result);
+        break;
+      end;
     end;
   end;
   function InBlockLevel(Rank: Byte=1):Integer;  // Func( X+Y*2    1+X.Next.Val
@@ -2423,6 +2820,25 @@ var
       end;
     end;
   end;
+  procedure PushEmptyItem;
+  var
+    e,n:Integer;
+  begin
+    e:=ExprLevel;
+    with JSONObject(Levels[e].Obj) do
+    begin
+      n:=Length;
+      Put(JEP_ParamHeader+IntToStr(n),JE_EmptyItemStr);
+      JLevel:=e+1;
+      with Levels[JLevel] do
+      begin
+        Obj:=ValObjByIndex[n];
+        BC:=BlockCnt;
+        OpCh:=OpCh_None;
+        Rank:=0;
+      end;
+    end;
+  end;
   function NewFuncObj(const AFunc: String):JSONObject; {$IF COMPILERVERSION>=18}inline;{$IFEND}
   begin
     Result:=JSONObject.Create.Put(JEP_Operator,AFunc);
@@ -2430,10 +2846,8 @@ var
   function WritePerfix(const Perfix: String; const IsEnd: Boolean):Boolean;
   var
     e,n,i:Integer;
-    v:Variant;
     mstr,KeyStr:String;
     Z,Z2:TZAbstractObject;
-    IsStdOp:Boolean;
   begin
     e:=ExprLevel;
     with JSONObject(Levels[e].Obj) do
@@ -2462,7 +2876,7 @@ var
           exit;
         end
         else begin  {op:" ",p1:"public",p2:"abstract",p3...}
-          IsStdOp:=true;
+          //IsStdOp:=true;
         end;
       end;
       if not IsEnd then
@@ -2522,6 +2936,7 @@ var
     Z,Z2:TZAbstractObject;
     J,JP,JN:JSONObject;
     mstr:String;
+    MyRank:Byte;
     label CommonCase;
   begin
     LastIsVar:=false;
@@ -2529,6 +2944,10 @@ var
     if OpHelper<>nil then  //2011-09-04
       Func:=OpHelper.TranslateOperator(Func,Levels[JLevel].Obj);
   {$ENDIF}
+    if (Func<>'') and ((AddMode=amOperator) or (AddMode=amBlockOp) or (AddMode=amBlock)) then
+      MyRank:=GetStdOpRank(Func[1],Func)
+    else
+      MyRank:=0;
     //最后一个Symbol是简单值或变量的情况 -- 应n当将其提升，嵌入到Func表达式内
     if Levels[JLevel].Obj.ClassType<>JSONObject then
     begin
@@ -2576,11 +2995,11 @@ var
                 if AddMode=amOperator then
                 begin
                   OpCh:=Func[1]; //AddMode;
-                  Rank:=GetStdOpRank(OpCh,Func);
+                  Rank:=MyRank;
                 end
                 else begin
                   OpCh:=OpCh_Func;
-                  Rank:=OpRank[OpCh_Func];
+                  Rank:=OpRank_Func;
                 end;
               exit;
             end;
@@ -2589,12 +3008,12 @@ var
             if (AddMode=amOperator) or (AddMode=amBlockOp) then  //2011-09-01
             begin
               OpCh:=Func[1];
-              Rank:=GetStdOpRank(OpCh,Func);
+              Rank:=MyRank;
             end
             else if AddMode=amFunc then
             begin
               OpCh:=OpCh_Func;
-              Rank:=OpRank[OpCh_Func];
+              Rank:=OpRank_Func;
             end;
           Dec(JLevel);
           exit;
@@ -2605,9 +3024,9 @@ var
           begin
             if (AddMode=amOperator) and (Func<>'') then
             begin
-              if (OpCh<>OpCh_None) and (GetStdOpRank(Func[1],Func)<=Rank) then
+              if (OpCh<>OpCh_None) and (MyRank<=Rank) then
               begin
-                JLevel:=InBlockLevel(GetStdOpRank(Func[1],Func)); //InBlockLevel; //n;
+                JLevel:=InBlockLevel(MyRank); //InBlockLevel; //n;
                 goto CommonCase;
               end;
             end;
@@ -2630,12 +3049,12 @@ var
           end
           else if AddMode=amOperator then
           begin
-            OpCh:=Func[1]; //AddMode;
-            Rank:=GetStdOpRank(OpCh,Func);
+            OpCh:=Func[1];
+            Rank:=MyRank;
           end
           else begin
             OpCh:=OpCh_Func;
-            Rank:=OpRank[OpCh_Func];
+            Rank:=OpRank_Func;
           end;
         end;
       end
@@ -2679,7 +3098,7 @@ var
             with Levels[JLevel] do
             begin
               OpCh:=OpCh_Func;
-              Rank:=OpRank[OpCh_Func];
+              Rank:=OpRank_Func;
             end;
             exit;
           end;
@@ -2694,11 +3113,11 @@ var
             else if AddMode=amOperator then
             begin
               OpCh:=Func[1]; //AddMode;
-              Rank:=GetStdOpRank(OpCh,Func);
+              Rank:=MyRank;
             end
             else begin
               OpCh:=OpCh_Func;
-              Rank:=OpRank[OpCh_Func];
+              Rank:=OpRank_Func;
             end;
           end;
         end;
@@ -2723,25 +3142,22 @@ var
     if ((AddMode=amOperator) or IsEmpty) and (Levels[JLevel].OpCh=OpCh_None) then
     begin
       J.Put(JEP_Operator,Func);
-      //Levels[JLevel].OpCh:=AddMode;
       with Levels[JLevel] do
         if AddMode=amOperator then
         begin
-          OpCh:=Func[1]; //AddMode;
-          Rank:=GetStdOpRank(OpCh,Func);
+          OpCh:=Func[1];
+          Rank:=MyRank;
         end
         else if AddMode=amFunc then
         begin
           OpCh:=OpCh_Func;
-          Rank:=OpRank[OpCh_Func];
+          Rank:=OpRank_Func;
         end
         else begin
           OpCh:=OpCh_None;
           Rank:=0;
         end;
     end
-    else if (Levels[JLevel].OpCh=OpCh_Sentence) and (Func=';') then  //平级的 ; 号   2010-06-28
-      exit
     else begin
       JN:=NewFuncObj(Func);
       Levels[JLevel+1].Obj:=JN;
@@ -2752,15 +3168,9 @@ var
       begin
         //当前Level的所有者
         if JLevel>0 then
-          JP:=JSONObject(Levels[JLevel-1].Obj)
-        else
-          JP:=nil;
-        if JP<>nil then
         begin
+          JP:=JSONObject(Levels[JLevel-1].Obj);
           n:=JP.Length;
-          {mstr:=JEP_ParamHeader+IntToStr(n-1);
-          J:=JSONObject(JP.Remove(mstr));
-          JN.Put(JEP_Param1,J);}
           //在含有前缀的情况下，最后一个Key不是 P + (n-1)  2011-09-20
           mstr:=JP.KeyByIndex[n-1];
           JN.Put(JEP_Param1,JP.Remove(mstr));
@@ -2779,18 +3189,17 @@ var
           else if AddMode in [amOperator,amBlockOp] then
           begin
             OpCh:=Func[1];
-            Rank:=GetStdOpRank(OpCh,Func);
+            Rank:=MyRank;
           end
           else begin
             OpCh:=OpCh_Func;
-            Rank:=OpRank[OpCh_Func];
+            Rank:=OpRank_Func;
           end;
         end;
         exit;
-      end
-      else
-        with J do
-          Put(JEP_ParamHeader+IntToStr(Length),Levels[JLevel+1].Obj);
+      end;
+      with J do
+        Put(JEP_ParamHeader+IntToStr(Length),Levels[JLevel+1].Obj);
       Inc(JLevel);
       with Levels[JLevel] do
       begin
@@ -2803,12 +3212,129 @@ var
         else if AddMode in [amOperator,amBlock,amBlockOp] then
         begin
           OpCh:=Func[1];
-          Rank:=GetStdOpRank(OpCh,Func);
+          Rank:=MyRank;
         end
         else begin
           OpCh:=OpCh_Func;
-          Rank:=OpRank[OpCh_Func];
+          Rank:=OpRank_Func;
         end;
+      end;
+    end;
+  end;
+  procedure AddLineDiv;
+  var
+    n,OriLv:Integer;
+    Z:TZAbstractObject;
+    J,JP,JN:JSONObject;
+    mstr:String;
+    label CommonCase;
+  begin
+    LastIsVar:=false;
+    //最后一个Symbol是简单值或变量的情况 -- 应n当将其提升，嵌入到Func表达式内
+    if Levels[JLevel].Obj.ClassType<>JSONObject then
+    begin
+      //简单变量后跟双目操作符
+      n:=JLevel-1;
+      JP:=JSONObject(Levels[n].Obj); //表达式JSON对象
+      //没有操作符的表达式 -- 填入Func
+      if Levels[n].OpCh=OpCh_None then
+      begin
+        //处理 ... var A:... 的情况  2011-09-18
+        JP.Put(JEP_Operator,OpCh_Sentence);
+        with Levels[n] do
+        begin
+          OpCh:=OpCh_Sentence;
+          Rank:=RK_Sentence;
+        end;
+        Dec(JLevel);
+        exit;
+      end;
+      with Levels[n] do
+      begin
+        if (BC>=BlockCnt) and (OpCh<>'[') then  //当前双目操作符和前一个表达式位于相同的括号层次
+        begin
+          if (OpCh<>OpCh_None) and (RK_Sentence<=Rank) then
+          begin
+            JLevel:=InBlockLevel(RK_Sentence); //InBlockLevel; //n;
+            goto CommonCase;
+          end;
+        end;
+      end;
+      with JP do
+      begin
+        mstr:=KeyByIndex[Length-1];  //最后一个Key
+        Z:=Remove(mstr);
+      end;
+      with Levels[JLevel] do
+      begin
+        Obj:=NewFuncObj(OpCh_Sentence);
+        JSONObject(Obj).Put(JEP_Param1,Z);
+        JP.Put(mstr,Obj);
+        OpCh:=OpCh_Sentence; //AddMode;
+        Rank:=RK_Sentence;
+      end;
+      exit;
+    end
+    else begin
+      OriLv:=JLevel;
+      JLevel:=InBlockLevel(RK_Sentence);
+      if JLevel>OriLv then
+      begin
+        //分隔符前无语句 if( a, ; b ....
+        JN:=NewFuncObj(OpCh_Sentence);
+        JLevel:=OriLv;
+        with JSONObject(Levels[JLevel].Obj) do
+        begin
+          n:=Length;
+          Put(JEP_ParamHeader+IntToStr(n),JN);
+        end;
+        Inc(JLevel);
+        with Levels[JLevel] do
+        begin
+          Obj:=JN;
+          OpCh:=OpCh_Sentence;
+          Rank:=RK_Sentence;
+          BC:=BlockCnt;
+        end;
+        exit;
+      end;
+    end;
+  CommonCase:
+    J:=JSONObject(Levels[JLevel].Obj);
+    if (Levels[JLevel].OpCh=OpCh_None) then
+    begin
+      J.Put(JEP_Operator,OpCh_Sentence);
+      with Levels[JLevel] do
+      begin
+        OpCh:=OpCh_Sentence;
+        Rank:=RK_Sentence;
+      end;
+    end
+    else if (Levels[JLevel].OpCh=OpCh_Sentence) then  //平级的 ; 号   2010-06-28
+      exit
+    else begin
+      JN:=NewFuncObj(OpCh_Sentence);
+      Levels[JLevel+1].Obj:=JN;
+      //按照左侧优先结合的规律进行重新组合——考虑运算符的优先级
+      // not X  =>  (not X) or Y
+      // X + Y  =>  ( X + Y ) - Z
+      //当前Level的所有者
+      if JLevel>0 then
+      begin
+        JP:=JSONObject(Levels[JLevel-1].Obj);
+        n:=JP.Length;
+        //在含有前缀的情况下，最后一个Key不是 P + (n-1)  2011-09-20
+        mstr:=JP.KeyByIndex[n-1];
+        JN.Put(JEP_Param1,JP.Remove(mstr));
+        JP.Put(mstr,JN);
+      end
+      else
+        JN.Put(JEP_Param1,J);
+      with Levels[JLevel] do
+      begin
+        Obj:=JN;
+        OpCh:=OpCh_Sentence;
+        Rank:=RK_Sentence;
       end;
     end;
   end;
@@ -3050,7 +3576,8 @@ begin
       if StrValue='-' then
       begin
         AddOp(StrValue);
-        WriteFloat(0);
+        //WriteFloat(0);
+        PushEmptyItem;  //2012-06-12
       end
       else begin
         try
@@ -3074,7 +3601,8 @@ begin
         AddOp(FuncName,amOperator,true);
         FuncName:='';
       end
-      else if NextIsBlockBegin(I) or (FuncName='NOT') or (FuncName='CONTINUE') or (FuncName='BREAK') or (FuncName='EXIT') then
+      else if NextIsBlockBegin(I) or (FuncName='NOT') or (FuncName='NEW')
+        or (FuncName='CONTINUE') or (FuncName='BREAK') or (FuncName='EXIT') then
       begin
         if not NextIsBlockBegin(I) then
           AddOp(FuncName,amFunc)
@@ -3106,6 +3634,14 @@ begin
     else if (Ch in MathOp2+CompOp2) then  //双目运算符以及比较操作符、赋值运算符
     begin
       if JLevel>=MaxJETreeLevel then break;  //强制跳出
+      if Ch=OpCh_Sentence then
+      begin
+        AddLineDiv;
+        FuncName:='';
+        ExprStart:=true;
+        Inc(I);
+        continue;
+      end;
       if Ch<>'/' then  //排除单行注释的情况
       begin
         StrValue:=Ch;
@@ -3411,6 +3947,20 @@ var
       begin
         if Result[1]=JEP_StrParamHeader then  //String
           Result:=QuotedStr(Copy(Result,2,MaxInt))
+        else if Result[1]=JEP_TypeHead then
+        begin
+          if (Length(Result)>1) then
+          begin
+            case Result[2] of
+              JEPT_EchoStr:
+              begin
+                Result:='?>'+Copy(Result,3,MaxInt)+'<?';
+              end;
+              JEPT_EmptyItem:
+                Result:='';
+            end;
+          end;
+        end
         else begin //Var Name
           if UseVarHelperOnTextGen and (VarHelper<>nil) and VarHelper.GetVar(Result,v) then
           begin
@@ -3629,6 +4179,11 @@ begin
   end;
 end;
 
+procedure TJSONExprParser.SetEchoFunc(const Value: TPrintFunc);
+begin
+  FEchoFunc := Value;
+end;
+
 procedure TJSONExprParser.SetOnLineComplete(const Value: TTraceLineFunc);
 begin
   FOnLineComplete := Value;
@@ -3662,6 +4217,34 @@ end;
 procedure TJSONExprParser.SetVarToStrDefFunc(const Value: TVarToStrDefFunc);
 begin
   FVarToStrDefFunc := Value;
+end;
+
+function TJSONExprParser.TypeStrToVar(const Str: String): Variant;
+var
+  mstr:String;
+begin
+  if (Length(Str)<2) or (Str[1]<>JEP_TypeHead) then
+  begin
+    Result:=Null;
+    exit;
+  end;
+  mstr:=Copy(Str,3,MaxInt);
+  case Str[2] of
+    JEPT_Hex:  Result:=HexToInt(mstr);
+    JEPT_Oct:  Result:=OctToInt(mstr);
+    JEPT_Bin:  Result:=BinToInt(mstr);
+    JEPT_Date: Result:=StrToDate(mstr);
+    JEPT_Time: Result:=StrToTime(mstr);
+    JEPT_DateTime: Result:=StrToDateTime(mstr);
+    JEPT_EchoStr:
+    begin
+      if Assigned(EchoFunc) then EchoFunc(mstr);
+      Result:=0;
+    end;
+    JEPT_EmptyItem: Result:=0;
+    else
+      Result:=Null;
+  end;
 end;
 
 class function TJSONExprParser.VarNeeded(AObj: JSONObject; var Vars: TStrings):Integer;
@@ -3715,7 +4298,7 @@ end;
 
 class function TJSONExprParser.Version: ShortString;
 begin
-  Result:='0.4.2';
+  Result:='0.5.0';
 end;
 
 { TJEVarHelper }
@@ -4397,6 +4980,20 @@ constructor TExitException.CreateVal(V: Variant);
 begin
   inherited Create('RET');
   ReturnVal:=V;
+end;
+
+{ TBreakException }
+
+constructor TBreakException.Create(Lv: Integer);
+begin
+  Level:=Lv;
+end;
+
+{ TContinueException }
+
+constructor TContinueException.Create(Lv: Integer);
+begin
+  Level:=Lv;
 end;
 
 initialization
