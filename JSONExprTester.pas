@@ -17,7 +17,7 @@ unit JSONExprTester;
 interface
 
 uses
-  SysUtils, Variants, uJSON, UJSONExpr;
+  SysUtils, Variants, uJSON, UJSONExpr, JEParser;
 
 function TestJSONExprParser(out Msg: String): Boolean;
 
@@ -71,12 +71,95 @@ end;
 function TestJSONExprParser(out Msg: String): Boolean;
 var
   AParser: TJSONExprParser;
+  ABasicParser, APhpJEParser: TJEParser;
+  BasicJEPC, PhpJEPC: TJEParserClass;
   VHelper:TSimpleVarHelper;
   J:JSONObject;
   mstr,mstr2,s1,s2:String;
   f,f2:Double;
   v:Variant;
   b:Boolean;
+  procedure TestScriptVal(const Src: String; AVal: Variant);
+  var
+    J:JSONObject;
+  begin
+    with AParser do
+    begin
+      J:=ExprToJSON(Src);
+      v:=Eval(J);
+    end;
+    if v<>AVal then
+    begin
+      Result:=false;
+      Msg:=Msg+#13#10+(Src+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
+    end;
+    J.Free;
+  end;
+  procedure TestLanScript(const Src: String; AVal: Variant; VName: String='');
+  var
+    b:Boolean;
+    J:JSONObject;
+  begin
+    ABasicParser.Source:=Src;
+    J:=ABasicParser.DoParse;
+    try
+      v:=AParser.Eval(J);
+      if VName<>'' then
+        VHelper.GetVar(VName,v);
+      b:=(v=AVal);
+    except
+      b:=false;
+    end;
+    if not b then
+    begin
+      Result:=false;
+      Msg:=Msg+#13#10+(Src+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
+    end;
+    J.Free;
+  end;
+  procedure CheckLanTrans(SrcLan, DestLan: TJEParser; const Src, Dest: String);
+  var
+    b:Boolean;
+    J:JSONObject;
+    OutTxt,mstr,mstr2:String;
+    n:Integer;
+  begin
+    if (SrcLan=nil) or (DestLan=nil) then exit;
+    SrcLan.Source:=Src;
+    J:=nil;
+    try
+      J:=SrcLan.DoParse;
+      b:=true;
+    except
+      b:=false;
+    end;
+    if not b then
+    begin
+      Result:=false;
+      Msg:=Msg+#13#10'CheckLanTrans'#13#10+Src+#13#10'Parse failed.';
+    end
+    else begin
+      try
+        OutTxt:=DestLan.TranslateJETree(J);
+      except
+        OutTxt:='';
+      end;
+      if OutTxt<>Dest then
+      begin
+        mstr:=DestLan.PackSrc(OutTxt,n);
+        if mstr<>Dest then
+        begin
+          mstr2:=DestLan.PackSrc(Dest,n);
+          if mstr<>mstr2 then
+          begin
+            Result:=false;
+            Msg:=Msg+#13#10'CheckLanTrans:'#13#10+Src+#13#10'==>'#13#10+mstr+#13#10'<>'#13#10+Dest;
+          end;
+        end;        
+      end;
+    end;
+    J.Free;
+  end;
 begin
   Msg:='';
   Result:=true;
@@ -99,7 +182,7 @@ begin
     mstr:='-X+2.5';
     with ExprToJSON(mstr) do
     begin
-      if toString<>'{op:"+",p1:{op:"-",p1:0,p2:"X"},p2:2.5}' then
+      if toString<>'{op:"+",p1:{op:"-",p1:"'+JE_EmptyItemStr+'",p2:"X"},p2:2.5}' then
       begin
         Result:=false;
         Msg:=Msg+#13#10+(mstr+#13#10'=>'#9+toString2(2));
@@ -198,24 +281,24 @@ begin
     mstr:='Fn_1(-A)+(-X)';
     with ExprToJSON(mstr) do
     begin
-      if toString<>'{op:"+",p1:{op:"FN_1",p1:{op:"-",p1:0,p2:"A"}},p2:{op:"-",p1:0,p2:"X"}}' then
+      if toString<>'{op:"+",p1:{op:"FN_1",p1:{op:"-",p1:"'+JE_EmptyItemStr+'",p2:"A"}},p2:{op:"-",p1:"'+JE_EmptyItemStr+'",p2:"X"}}' then
       begin
         Result:=false;
         Msg:=Msg+#13#10+(mstr+#13#10'=>'#9+toString);
       end;
       Free;
     end;
-    mstr:='IF(X>=0,X,Y-X+Power(Ln(Z),3))-100';
+    mstr:='IIF(X>=0,X,Y-X+Power(Ln(Z),3))-100';
     J:=ExprToJSON(mstr);
     with J do
     begin
-      if toString<>'{op:"-",p1:{op:"IF",p1:{op:">=",p1:"X",p2:0},p2:"X",p3:{op:"+",p1:{op:"-",p1:"Y",p2:"X"},p2:{op:"POWER",p1:{op:"LN",p1:"Z"},p2:3}}},p2:100}' then
+      if toString<>'{op:"-",p1:{op:"IIF",p1:{op:">=",p1:"X",p2:0},p2:"X",p3:{op:"+",p1:{op:"-",p1:"Y",p2:"X"},p2:{op:"POWER",p1:{op:"LN",p1:"Z"},p2:3}}},p2:100}' then
       begin
         Result:=false;
         Msg:=Msg+#13#10+(mstr+#13#10'=>'#9+toString2(2));
       end;
       s1:=JSONToExpr(J);
-      if s1<>'(IF((X>=0),X,((Y-X)+POWER(LN(Z),3)))-100)' then
+      if s1<>'(IIF((X>=0),X,((Y-X)+POWER(LN(Z),3)))-100)' then
       begin
         Result:=false;
         Msg:=Msg+#13#10+mstr+' => '+s1;
@@ -358,6 +441,8 @@ begin
     if not CheckParseText(mstr,Msg,AParser) then Result:=false;
     mstr:='FOO(X;OUT VAR Y)';
     if not CheckParseText(mstr,Msg,AParser) then Result:=false;
+    mstr:='A:=-10;--A;A++;-A';
+    if not CheckParseText(mstr,Msg,AParser) then Result:=false;
     Free;
   end;
   //Eval Test
@@ -394,7 +479,7 @@ begin
     end;
     J.Free;
     UseVarHelperOnParse:=false;
-    mstr:='i:=0;c:=0;n:=Times(10,i+=4;ifelse(i%3=0,continue,i>30,break);c++;i++));c*=n';
+    mstr:='i:=0;c:=0;n:=Times(10,i+=4;if(i%3=0,continue,i>30,break);c++;i++));c*=n';
     J:=ExprToJSON(mstr);
     v:=Eval(J);
     if v<>21 then
@@ -424,26 +509,13 @@ begin
     J.Free;
     UseVarHelperOnParse:=false;
     //Cycle test
-    mstr:='n:=0; For(i:=1, Inc(i), i<=100, n:=n+i); n';
-    J:=ExprToJSON(mstr);
-    v:=Eval(J);
-    if v<>5050 then
-    begin
-      Result:=false;
-      Msg:=Msg+#13#10+(mstr+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
-    end;
-    J.Free;
-    mstr:='n:=1; i:=2; While(i<10, n:=n*i; i:=i+2); n';
-    J:=ExprToJSON(mstr);
-    v:=Eval(J);
-    if v<>384 then
-    begin
-      Result:=false;
-      Msg:=Msg+#13#10+(mstr+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
-    end;
-    J.Free;
+    TestScriptVal('n:=0; For(i:=1, i<=100, Inc(i), n:=n+i); n',5050);
+    TestScriptVal('n:=0; ForTo(i:=10, 7, -1, n+=i); n',34);
+    TestScriptVal('n:=1; i:=2; While(i<10, n:=n*i; i:=i+2); n',384);
+    TestScriptVal('n:=1; i:=2; WhileNot(i>=10, n:=n*i; i:=i+2); n',384);
+    TestScriptVal('n:=1; i:=2; Loop(n:=n*i; i:=i+2, i<5); n',8);
     VHelper.PutNull('Y');
-    mstr:='IF(Y IS not NULL, 3*0.5+Y, 5.875-(9<<2)*X)';
+    mstr:='IIF(Y IS not NULL, 3*0.5+Y, 5.875-(9<<2)*X)';
     UseVarHelperOnParse:=true;
     J:=ExprToJSON(mstr{,VHelper});
     v:=Eval(J);
@@ -463,102 +535,35 @@ begin
       Msg:=Msg+#13#10+(mstr+#13#10+JSONToExpr(J)+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
     end;
     J.Free;
+    // ";" 前无语句
+    TestScriptVal('z:=2;if(1>0,;a:=3,b:=4;z:=5);a*z=6',true);
     //无参数函数跟加减表达式解析测试
-    mstr:='(Now()+1)-(Now()-1)';
-    J:=ExprToJSON(mstr);
-    v:=Eval(J);
-    if v<>2 then
-    begin
-      Result:=false;
-      Msg:=Msg+#13#10+(mstr+#13#10+JSONToExpr(J)+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
-    end;
-    J.Free;
+    TestScriptVal('(Now()+1)-(Now()-1)',2);
     // 以 + 开头的表达式
-    mstr:='+1.25';
-    J:=ExprToJSON(mstr);
-    v:=Eval(J);
-    if v<>1.25 then
-    begin
-      Result:=false;
-      Msg:=Msg+#13#10+(mstr+#13#10+JSONToExpr(J)+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
-    end;
-    J.Free;
+    TestScriptVal('+1.25',1.25);
     // BETWEEN 表达式
-    mstr:='BETWEEN(''B'',''A1'',''X'') AND BETWEEN(100,100,1e+3)';
-    J:=ExprToJSON(mstr);
-    v:=Eval(J);
-    if v<>true then
-    begin
-      Result:=false;
-      Msg:=Msg+#13#10+(mstr+#13#10+JSONToExpr(J)+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
-    end;
-    J.Free;
+    TestScriptVal('BETWEEN(''B'',''A1'',''X'') AND BETWEEN(100,100,1e+3)',true);
     // in 不同类型表达式
-    mstr:='12 in (''B''+''A'', false, Z, 18-6.0)';
-    J:=ExprToJSON(mstr);
-    v:=Eval(J);
-    if v<>true then
-    begin
-      Result:=false;
-      Msg:=Msg+#13#10+(mstr+#13#10+JSONToExpr(J)+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
-    end;
-    J.Free;
+    TestScriptVal('12 in (''B''+''A'', false, Z, 18-6.0)',true);
     //访问数组元素
-    mstr:='A:=(1,2,4,8); B:=A[2];';
-    J:=ExprToJSON(mstr);
-    v:=Eval(J);
-    if v<>4 then
-    begin
-      Result:=false;
-      Msg:=Msg+#13#10+(mstr+#13#10+JSONToExpr(J)+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
-    end;
-    J.Free;
-    mstr:='A:=((1,10),2,4,8); B:=A[3-2-1,1];';
-    J:=ExprToJSON(mstr);
-    v:=Eval(J);
-    if v<>10 then
-    begin
-      Result:=false;
-      Msg:=Msg+#13#10+(mstr+#13#10+JSONToExpr(J)+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
-    end;
-    J.Free;
+    TestScriptVal('A:=(1,2,4,8); B:=A[2];',4);
+    TestScriptVal('A:=((1,10),2,4,8); B:=A[3-2-1,1];',10);
     //collection and array test
-    mstr:='C:=(1,1+2); a:=(20,1+1); PRINT(1+a[1]); IF((1+a[1]) in C, a[0]-(C[1]*2), -a[1])';
-    J:=ExprToJSON(mstr);
-    v:=Eval(J);
-    if v<>14 then
-    begin
-      Result:=false;
-      Msg:=Msg+#13#10+(mstr+#13#10+JSONToExpr(J)+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
-    end;
-    J.Free;
+    TestScriptVal('C:=(1,1+2); a:=(20,1+1); PRINT(1+a[1]); IIF((1+a[1]) in C, a[0]-(C[1]*2), -a[1])',14);
     //Eval test
-    mstr:='A:=''99'';Eval(''10''+A+''.0-100+2'');';
-    J:=ExprToJSON(mstr);
-    v:=Eval(J);
-    if v<>1001 then
-    begin
-      Result:=false;
-      Msg:=Msg+#13#10+(mstr+#13#10+JSONToExpr(J)+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
-    end;
-    J.Free;
-    //  ?= test
-    mstr:='A:=33;B:=(A/=3);B+=100';
-    J:=ExprToJSON(mstr);
-    v:=Eval(J);
-    if v<>111 then
-    begin
-      Result:=false;
-      Msg:=Msg+#13#10+(mstr+#13#10+JSONToExpr(J)+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
-    end;
-    J.Free;
+    TestScriptVal('A:=''99'';Eval(''10''+A+''.0-100+2'');',1001);
+    // ?= test
+    TestScriptVal('A:=33;B:=(A/=3);B+=100',111);
+    //2012-06-22  Test expr with multi block end.
+    TestScriptVal('(3-(6))/2',-1.5);
+    TestScriptVal('(5/4+(2-(3-(6+4/5))))/(3*(6-2)*(2-7))',-0.1175);
     //Debug example
     DebugMsg:='';
     TraceOnLine:=true;
     OnLineComplete:=TraceLine;
     VHelper.TraceOnSet:=true;
     VHelper.OnTrace:=TraceValue;
-    mstr:='X1:=1; Y:=IF(X IS NULL,0,X1^5);Z:=9*IF(X1+2<=(3+Y),X2:=X1<<3,(Y:=X1*10; X2:=Y^100));(Y+Z)*X2';
+    mstr:='X1:=1; Y:=IIF(X IS NULL,0,X1^5);Z:=9*IIF(X1+2<=(3+Y),X2:=X1<<3,(Y:=X1*10; X2:=Y^100));(Y+Z)*X2';
     J:=ExprToJSON(mstr);
     v:=Eval(J);
     if v<>608 then
@@ -588,11 +593,59 @@ begin
       Msg:=Msg+#13#10'Debug Message:'#13#10+DebugMsg;
     J.Free;
     DebugMsg:='';
+    BasicJEPC:=TJEParser.GetParserForLan('Basic');
+    if BasicJEPC<>nil then
+    begin
+      ABasicParser:=BasicJEPC.Create;
+      //Test If then
+      TestLanScript('a=10 : b=2'#13#10'if a>b and (a<=b*5) then'#13#10
+        +'b=a mod 3'#13#10
+        +'end if'#13#10
+        +'x=(a-1)*b',9,'x');
+      //Test For to step then
+      TestLanScript('n=0'#13#10'a=3'#13#10
+        +'for i=1 to 10 step a'#13#10
+        +'  n=n+i'#13#10
+        +'next'#13#10
+        +'x=a*n',66,'x');
+      //Test logic
+      TestLanScript('b1=false'#13#10'b=b1=false and not (1<0)',true,'b');
+      TestLanScript('if (2<=1 or 1<2) and not (1=0) then a=10 else a=1',10,'a');
+      TestLanScript('if (1>2) or (2>=1 and 1<>0) then a=100 else a=20',100,'a');
+      TestLanScript('a="123"'#13#10'b=a+"abc"&a','123abc123','b');
+      if Result then
+        Msg:=Msg+#13#10'Basic OK!';
+      PhpJEPC:=TJEParser.GetParserForLan('PHP');
+      if PhpJEPC<>nil then
+      begin
+        APhpJEParser:=PhpJEPC.Create;
+        CheckLanTrans(ABasicParser,APhpJEParser,'if A then'#13#10'  B'#13#10'  C'#13#10'end if','<?php if($A){B();C();} ?>');
+        CheckLanTrans(ABasicParser,APhpJEParser,'if A then:B:C:end if','<?php if($A){B();C();} ?>');
+        CheckLanTrans(ABasicParser,APhpJEParser,'if a then:a=new C:set b=new xx(123):xxx:end if',
+          '<?php if($a){ $a=new C(); $b=new xx(123); xxx();} ?>');
+        CheckLanTrans(ABasicParser,APhpJEParser,'if L>0 then'#13#10'  if 1=X then'
+          +#13#10'    ''??'#13#10'    A=B'#13#10'  end if'#13#10'end if',
+          '<?php if($L>0){if(1==$X){$A=$B;}}?>');
+        CheckLanTrans(ABasicParser,APhpJEParser,'if A>B then X=A','<?php if($A>$B){$X=$A;} ?>');
+        CheckLanTrans(ABasicParser,APhpJEParser,'redim a(10*N,2,c-1)',
+          '<?php $a=array_fill(0,(10*$N+1),array_fill(0,3,array_fill(0,$c,null))); ?>');
+        CheckLanTrans(ABasicParser,APhpJEParser,'Dim Fds:A=Fds(i+3)((8-9)/X)',
+          '<?php $Fds=null;$A=$Fds[$i+3][(8-9)/$X]; ?>');
+        CheckLanTrans(ABasicParser,APhpJEParser,'ReDim A(100,2):A(88,2)=12','<?php $A=array_fill(0,101,array_fill(0,3,null));$A[88][2]=12; ?>');
+        CheckLanTrans(ABasicParser,APhpJEParser,'a=-b','<?php $a=-$b; ?>');
+        CheckLanTrans(ABasicParser,APhpJEParser,'a=-(b+2)','<?php $a=-($b+2); ?>');
+        CheckLanTrans(ABasicParser,APhpJEParser,'if a=-(b+2) then c=1','<?php if($a==-($b+2)){$c=1;} ?>');
+        if Result then
+          Msg:=Msg+#13#10'PHP OK!';
+        APhpJEParser.Free;
+      end;
+      ABasicParser.Free;
+    end;
     Free;
   end;
   J:=JSONObject.Create;
   VHelper.ValExport(J);
-  Msg:=Msg+#13#10+J.ToString;
+  Msg:=Msg+#13#10#13#10+J.ToString;
   J.Free;
   VHelper.Free;
   DebugMsg:='';

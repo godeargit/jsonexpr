@@ -32,6 +32,9 @@ Change Logs:
 2011-09-20  By creation_zy
   Add SafeFreeJObj.
   Add "inline" directive.
+
+2011-12-15  By creation_zy
+  Add SpaceStr function to optimize toString3.
 }
 unit uJSON;
 
@@ -47,7 +50,7 @@ uses
 
 
 Type
-  TZAbstractObject = class
+  TZAbstractObject = class (TObject)
     function Equals(const Value: TZAbstractObject): Boolean; virtual;
     function Hash: LongInt;
     function Clone: TZAbstractObject; virtual;
@@ -56,6 +59,7 @@ Type
     class function getInt(o: TZAbstractObject; DefaultValue: Integer):Integer;
     class function getDouble(o: TZAbstractObject; DefaultValue: Double):Double;
     class function getBoolean(o: TZAbstractObject; DefaultValue: Boolean):Boolean;
+    procedure Free; overload;  //2011-10-10  Call SafeFreeJObj
   end;
     
   ClassCastException = class (Exception) end;
@@ -187,7 +191,9 @@ Type
     function GetDiffFrom(Source: JSONObject; UseSrc: Boolean=true):JSONObject;
     procedure Delete(index: Integer);
     procedure RemoveByKeyHeader(const Header: String='~');
+    function RemoveLastKey:TZAbstractObject;
     procedure CleanKey(const Key: String);
+    function SetKey(idx: Integer; const Key: String):Boolean;
     function PropCount:Integer;
     function KeyByVal(const Value: String):String;
     function PartExtract(KeyNames: TStrings; DoRemove: Boolean):JSONObject;
@@ -256,6 +262,7 @@ Type
   {$IFDEF J_OBJECT}
     function put ( index: integer ; value: TObject): JSONArray; overload;
   {$ENDIF}
+    function LastItem: TZAbstractObject;
     function toJSONObject (names  :JSONArray ): JSONObject ;  overload ;
     function toString: string; overload; override;
     function toString2 (indentFactor: integer): string; overload;
@@ -350,9 +357,17 @@ Type
   end;
 {$ENDIF}
 
+  TJObjTransFlag=(jtfDbQouteStr, jtfQouteStr, jtfOtherAsStr);
+  TJObjTransFlags=set of TJObjTransFlag;
+
+function HexToInt(const S: String):Integer;
 function IsConstJSON(Z: TObject):Boolean;
 procedure SafeFreeJObj(Z: TObject);{$IF COMPILERVERSION>=18}inline;{$IFEND}
+function SpaceStr(ALen: Integer):String;
+function StrToAbstractJObj(const Str: String; Flags: TJObjTransFlags=[jtfDbQouteStr, jtfQouteStr]):TZAbstractObject;
 
+const
+  Space64='                                                                ';
 var
   gcLista: TList;
   CNULL: _NULL;
@@ -408,6 +423,20 @@ begin
     Z.Free;
 end;
 
+//By creation_zy  2011-12-15
+function SpaceStr(ALen: Integer):String; {$IFDEF INLINE_OPT}inline;{$ENDIF}
+var
+  i:Integer;
+begin
+  Result:='';
+  if ALen>=64 then
+  begin
+    for i:=1 to ALen div 64 do
+      Result:=Result+Space64
+  end;
+  Result:=Result+Copy(Space64,1,ALen mod 64);
+end;
+
 procedure newNotImplmentedFeature () ;
 begin
   raise NotImplmentedFeature.create (CROTINA_NAO_IMPLEMENTADA);
@@ -428,32 +457,101 @@ begin
 end;
 
 
-function HexToInt(S: String): Integer;
+function HexToInt(const S: String): Integer;
+const HexMap:array [Char] of SmallInt =
+  (
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9,-1,-1,-1,-1,-1,-1,
+   -1,10,11,12,13,14,15,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,10,11,12,13,14,15,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1
+   );
 var
-  I, E, F, G: Integer;
-  function DigitValue(C: Char): Integer;
+  i, n, l: Integer;
+begin
+  Result:=0;
+  l:=Length(S);
+  if l=0 then exit;  
+  if S[1]='$' then
+    n:=2
+  else if (n>=2) and (S[2] in ['x','X']) then
+    n:=3
+  else
+    n:=1;
+  for i:=n to l do
+    Result:=Result*16+HexMap[S[i]];
+end;
+
+function StrToAbstractJObj(const Str: String; Flags: TJObjTransFlags):TZAbstractObject;
+var
+  i:Integer;
+begin
+  if Str<>'' then
   begin
-    case C of
-      'A': Result:=10;
-      'B': Result:=11;
-      'C': Result:=12;
-      'D': Result:=13;
-      'E': Result:=14;
-      'F': Result:=15;
-    else
-      Result:=StrToInt(C);
+    case Str[1] of
+      '{':
+      begin
+        try
+          Result:=JSONObject.Create(Str);
+        except
+          //
+        end;
+        exit;
+      end;
+      '[':
+      begin  
+        try
+          Result:=JSONArray.Create(Str);
+        except
+          //
+        end;
+        exit;      
+      end;
+      '0'..'9','.','-':
+      begin
+        try
+          i:=StrToInt(Str);
+          Result:=_Integer.Create(i);
+        except
+          Result:=_Double.Create(StrToFloatDef(Str,0));
+        end;
+        exit;
+      end;
+      'n':
+      begin
+        if Str='null' then
+        begin
+          Result:=CNull;
+          exit;
+        end;
+      end;
+      't','T','F','f':
+      begin
+        if UpperCase(Str)='TRUE' then
+        begin
+          Result:=CONST_TRUE;
+          exit;
+        end
+        else if UpperCase(Str)='FALSE' then
+        begin
+          Result:=CONST_FALSE;
+          exit;
+        end;
+      end;
     end;
   end;
-begin
-  S:=UpperCase(S);
-  if S[1] = '$' then Delete(S, 1, 1);
-  if S[2] = 'X' then Delete(S, 1, 2);
-  E:=-1; Result:=0;
-  for I:=Length(S) downto 1 do begin
-    G:=1; for F:=0 to E do G:=G*16;
-    Result:=Result+(DigitValue(S[I])*G);
-    Inc(E);
-  end;
+  Result:=_String.create(Str);
 end;
 
 { JSONTokener }
@@ -822,9 +920,8 @@ begin
 
   s:=trim (sb);
   n:=System.Length(s);
-  if n=0 then begin
+  if n=0 then
     raise syntaxError('Missing value.');
-  end;
   if n in [4,5] then  //2009-09-14  Length limit before AnsiLowerCase.  By creation_zy
   begin
     sb:=AnsiLowerCase(s);
@@ -883,7 +980,7 @@ begin
         end;
       end;
     end;
-    if Pos('.',s)<0 then
+    if Pos('.',s)=0 then  //2011-10-02  Bug fixed.  By creation_zy
       try
         Result:=_Integer.create(s);
         exit;
@@ -1012,9 +1109,6 @@ begin
 end;
 
 { JSONObject }
-
-
-
 
 (**
 * Construct an empty JSONObject.
@@ -1164,20 +1258,21 @@ function JSONObject.getBoolean(const key: string): boolean;
 var
  o: TZAbstractObject;
 begin
-    o:=get(key);
-    if (o.equals(_Boolean._FALSE) or
-            ((o is _String) and
-            (_String(o)).equalsIgnoreCase('false'))) then begin
-        Result:=false;
-        exit;
-    end else if (o.equals(_Boolean._TRUE) or
-            ((o is _String) and
-            (_String(o)).equalsIgnoreCase('true'))) then begin
-        Result:=true;
-        exit;
-    end;
-    raise ClassCastException.create('JSONObject[' +
-        quote(key) + '] is not a Boolean.');
+  o:=get(key);
+  if (o.equals(_Boolean._FALSE) or
+          ((o is _String) and
+          (_String(o)).equalsIgnoreCase('false'))) then begin
+      Result:=false;
+      exit;
+  end
+  else if (o.equals(_Boolean._TRUE) or
+          ((o is _String) and
+          (_String(o)).equalsIgnoreCase('true'))) then begin
+      Result:=true;
+      exit;
+  end;
+  raise ClassCastException.create('JSONObject[' +
+      quote(key) + '] is not a Boolean.');
 end;
 
 function JSONObject.getDouble(const key: string): double;
@@ -1286,7 +1381,7 @@ end;
      *)
 function JSONObject.has(const key: string): boolean;
 begin
-   Result:=myHashMap.IndexOf(key)>=0;
+  Result:=myHashMap.IndexOf(key)>=0;
 end;
 
 
@@ -1314,7 +1409,7 @@ end;
 
 function JSONObject.length: integer;
 begin
-   Result:=myHashMap.Count;
+  Result:=myHashMap.Count;
 end;
 
 
@@ -1622,8 +1717,20 @@ end;
      * @return      A string which is the value.
      *)
 function JSONObject.optString(const key: string): string;
+var
+  o: TZAbstractObject ;
+  i:Integer;
 begin
-  Result:=optString(key, '');
+  i:=myHashMap.IndexOf(key);
+  if i<0 then
+    Result:=''
+  else begin
+    o:=TZAbstractObject(myHashMap.Objects[i]);
+    if (o <> nil) then
+      Result:=o.toString()
+    else
+      Result:='';
+  end;
 end;
 
 (**
@@ -1639,11 +1746,10 @@ var
   o: TZAbstractObject ;
 begin
   o:=Opt(key);
-  if (o <> nil) then begin
-    Result:=o.toString();
-  end else begin
+  if (o <> nil) then
+    Result:=o.toString()
+  else
     Result:=defaultValue;
-  end;
 end;
 
 function JSONObject.OptString2(key, key2: String; DefaultValue: String): String;
@@ -1966,9 +2072,9 @@ end;
      *)
 function JSONObject.toString3(indentFactor, indent: integer): string;
 var
- j , i , n , newindent: integer;
- _keys: TStringList;
- o, sb: string;
+  j , i , n , newindent: integer;
+  _keys: TStringList;
+  o, sb: string;
 begin
   //i:=0;
   n:=length();
@@ -2000,23 +2106,14 @@ begin
         else begin
           sb:= sb + #10;
         end;
-        for i:=0 to newindent -1 do
-        begin
-          sb:= sb + ' ';
-        end;
-        sb:= sb + quote(o);
-        sb:= sb + ': ';
-        sb:= sb + valueToString(TZAbstractObject(myHashMap
-        .Objects[myHashMap.IndexOf(o)])
-        , indentFactor, newindent);
+        sb:= sb + SpaceStr(newindent) + quote(o) + ': ';
+        sb:= sb + valueToString(TZAbstractObject(myHashMap.Objects[myHashMap.IndexOf(o)])
+          , indentFactor, newindent);
       end;
       if (System.length(sb) > 1) then
       begin
         sb:=sb + #10;
-        for i:=0 to indent -1 do
-        begin
-          sb:= sb + ' ';
-        end;
+        sb:= sb + SpaceStr(indent);
       end;
     end;
     sb:= sb + '}';
@@ -2301,6 +2398,23 @@ begin
   end;
 end;
 
+function JSONObject.RemoveLastKey: TZAbstractObject;
+var
+  i:Integer;
+begin
+  with myHashMap do
+  begin
+    i:=length-1;
+    if i<0 then
+    begin
+      Result:=nil;
+      exit;
+    end;
+    Result:=TZAbstractObject(Objects[i]);
+    delete(i);
+  end;
+end;
+
 function JSONObject.PropCount: Integer;
 begin
   Result:=myHashMap.Count;
@@ -2420,6 +2534,13 @@ begin
     Self.Put(Keys[StartIdx],JObj);
   end;
   JObj.SetCascadeValueEx(Value,Keys,StartIdx+1);
+end;
+
+function JSONObject.SetKey(idx: Integer; const Key: String): Boolean;
+begin
+  Result:=myHashMap.IndexOf(Key)<0;
+  if not Result or (idx<0) or (idx>=myHashMap.Count) then exit;
+  myHashMap.Strings[idx]:=Key;
 end;
 
 function JSONObject.GetValByIndex(index: Integer): String;
@@ -2710,15 +2831,19 @@ end;
      * @exception ParseException Expected a ',' or ']'
      *)
 constructor JSONArray.create(x: JSONTokener);
+var
+  Ch:Char;
 begin
   create;
   if (x.nextClean() <> '[') then
     raise x.syntaxError('A JSONArray must start with "["');
   //if (x.nextClean() = ']') then exit;
   //{$IFDEF BACK_OPT}if x.myIndex>1 then Dec(x.myIndex);{$ELSE}x.back();{$ENDIF}
+  Ch:=x.nextClean();
+  if Ch=']' then exit;  
   while true do
   begin
-    if (x.nextClean() = ',') then begin
+    if (Ch = ',') then begin
         {$IFDEF BACK_OPT}if x.myIndex>1 then Dec(x.myIndex);{$ELSE}x.back();{$ENDIF}
         myArrayList.add(nil);
     end
@@ -2735,6 +2860,7 @@ begin
       ']': exit;
       else raise x.syntaxError('Expected a "," or "]"');
     end;
+    Ch:=x.nextClean();
   end;
 end;
 
@@ -3036,6 +3162,17 @@ begin
         sb:= sb + JSONObject.valueToString(TZAbstractObject( myArrayList[i]));
     end;
     Result:=sb;
+end;
+
+function JSONArray.LastItem: TZAbstractObject;
+var
+  Len:Integer;
+begin
+  Len:=length();
+  if Len=0 then
+    Result:=nil
+  else
+    Result:=TZAbstractObject(TZAbstractObject(myArrayList[Len-1]));
 end;
 
 (**
@@ -3508,25 +3645,17 @@ begin
     sb:=sb + JSONObject
       .valueToString(TZAbstractObject( myArrayList[0]),indentFactor, indent);
   end
-  else
-  begin
+  else begin
     newindent:=indent + indentFactor;
     sb:=sb + #10 ;
     for i:=0 to len -1 do
     begin
-      if (i > 0) then begin
+      if i > 0 then
         sb:=sb +',' + #10;
-      end;
-      for j:=0 to newindent-1 do begin
-        sb:=sb + ' ';
-      end;
-      sb:=sb + (JSONObject.valueToString(TZAbstractObject(myArrayList[i]),
+      sb:=sb + SpaceStr(newindent) + (JSONObject.valueToString(TZAbstractObject(myArrayList[i]),
         indentFactor, newindent));
     end;
-    sb:=sb + #10;
-    for i:=0 to indent-1 do begin
-        sb:=sb + ' ';
-    end;
+    sb:=sb + #10 + SpaceStr(indent);
   end;
   sb:=sb + ']';
   Result:=sb;
@@ -3566,6 +3695,11 @@ end;
 function TZAbstractObject.Equals(const Value: TZAbstractObject): Boolean;
 begin
   Result:=(value <> nil) and (value = self);
+end;
+
+procedure TZAbstractObject.Free;
+begin
+  SafeFreeJObj(Self);
 end;
 
 class function TZAbstractObject.getBoolean(o: TZAbstractObject; DefaultValue: Boolean): Boolean;
@@ -3680,13 +3814,13 @@ end;
 {$ENDIF}
 
 initialization
-  CONST_FALSE:=_Boolean.create(false);
-  CONST_TRUE:=_Boolean.create(true);
-  CNULL:=_NULL.create;
+  CONST_FALSE:=_Boolean.Create(false);
+  CONST_TRUE:=_Boolean.Create(true);
+  CNULL:=_NULL.Create;
 
 finalization
-  CONST_FALSE.free;
-  CONST_TRUE.Free;
-  CNULL.free;
+  TObject(CONST_FALSE).Free;
+  TObject(CONST_TRUE).Free;
+  TObject(CNULL).Free;
 
 end.
