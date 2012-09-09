@@ -19,7 +19,9 @@ type
   protected
     procedure InitParser; override;
     function GetOpRank(const Op: String):Byte; override;
+    function TransIF_(JObj: TJEBranch; Ident: Integer; NeedVal: Boolean):String;
     function TransIF(JObj: TJEBranch; Ident: Integer):String; override;
+    function TransIIF(JObj: TJEBranch; Ident: Integer):String; override;
   public
     class function Lan:ShortString; override;
     function TransCommonOp(JObj: TJEBranch; const Op: String;
@@ -312,6 +314,11 @@ test:
   1+IF(A<B,IF(B,100,0.5)*1.5,IF(A<>C,2-3,4+5))
 }
 function TJEPascalParser.TransIF(JObj: TJEBranch; Ident: Integer): String;
+begin
+  Result:=TransIF_(JObj,Ident,false);
+end;
+
+function TJEPascalParser.TransIF_(JObj: TJEBranch; Ident: Integer; NeedVal: Boolean): String;
 var
   Str0,Str1,LStr,TmpVar:String;
   MyObj:TJENode;
@@ -324,7 +331,7 @@ begin
   if Str0='' then Str0:='true';
   Gather_BeforeAfter(Ident);
   Result:='if '+Str0+' then';
-  NVal:=NodeNeedVal;
+  NVal:=NeedVal and NodeNeedVal;
   //需要IF表达式的返回值  X := IF( ?, A, B )    Y:=IF(?,X+IF(?,1,2),3)+100
   if NVal then
   begin
@@ -372,6 +379,11 @@ begin
     Set_Before(Result);
     Result:=TmpVar;
   end;
+end;
+
+function TJEPascalParser.TransIIF(JObj: TJEBranch; Ident: Integer): String;
+begin
+  Result:=TransIF_(JObj,Ident,true);
 end;
 
 initialization

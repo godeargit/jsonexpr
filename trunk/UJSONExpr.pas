@@ -159,14 +159,21 @@ ver 0.4.2  By creation_zy  (无尽愿)
 2012-06-17
 ver 0.5.0  By creation_zy
   Bug fix for "multi block end" which found by rinospro@gmail.com.
+
+2012-08-27
+ver 0.5.1  By creation_zy
+  Bug fix for "IIF".
+  Support SuperObject JSON Toolkit -- Just can be compiled.
 }
 
 unit UJSONExpr;
 
 interface
 
+//{$DEFINE SUPEROBJECT}
+
 uses
-  SysUtils, Classes, Variants, uJSON;
+  SysUtils, Classes, Variants, {$IFDEF SUPEROBJECT}SuperObject{$ELSE}uJSON{$ENDIF};
 
 // If the parser is too complex for you, you can remove some function from it.
 // -- Just use the conditonal define below.
@@ -280,7 +287,9 @@ const
 type
   TParamIdxs=(pi1,pi2,pi3,pi4,pi5,pi6,pi7,pi8);
   TParamSet=set of TParamIdxs;
-  TTraceLineFunc=procedure (Sender: TObject; LineData: TZAbstractObject; const LineVal: Variant);
+  TJSONLeaf={$IFDEF SUPEROBJECT}ISuperObject{$ELSE}TZAbstractObject{$ENDIF};
+  TJSONObj={$IFDEF SUPEROBJECT}ISuperObject{$ELSE}JSONObject{$ENDIF};
+  TTraceLineFunc=procedure (Sender: TObject; LineData: TJSONLeaf; const LineVal: Variant);
   TTraceValueFunc=procedure (Sender: TObject; const VarName: String; const Val: Variant);
   TVarToStrDefFunc=function (v: Variant; const ADefault: String): String;
   TPrintFunc=procedure (const Str: String);
@@ -330,16 +339,16 @@ type
     property VarToStrDefFunc:TVarToStrDefFunc read FVarToStrDefFunc write SetVarToStrDefFunc;
     property PrintFunc:TPrintFunc read FPrintFunc write SetPrintFunc;
     property EchoFunc:TPrintFunc read FEchoFunc write SetEchoFunc;
-    function Eval(AObj: TZAbstractObject):Variant;
-    function EvalNumber(AObj: TZAbstractObject; out Val:Double):Boolean;
-    function OptimizeJSON(AObj: JSONObject):JSONObject;
+    function Eval(AObj: TJSONLeaf):Variant;
+    function EvalNumber(AObj: TJSONLeaf; out Val:Double):Boolean;
+    function OptimizeJSON(AObj: TJSONObj):TJSONObj;
     procedure AddVarHelper(AHelper: TJEVarHelper);
     procedure AddFuncHelper(AHelper: TJEFuncHelper);
     procedure RemoveVarHelper(AHelper: TJEVarHelper);
     procedure RemoveFuncHelper(AHelper: TJEFuncHelper);
     //将文本表达式转换为JSON表达式树，允许代入变量的值  2+(X*Sin(Y)) => {op:"+",p1:2,p2:{op:"*",p1:"X",p2:{op:"SIN",p1:"Y"}}}
     function ExprToJSON(const Expr: String; PStart: PInteger=nil; PEnd: PInteger=nil;
-      POutExprLen: PInteger=nil):JSONObject;
+      POutExprLen: PInteger=nil):TJSONObj;
     function ExprToJSONStr(const Expr: String):String;
     class function GetLastExprType:TExprType;
     { 将JSON表达式还原为文本表达式
@@ -347,9 +356,9 @@ type
       如果ParentOpRank<0，会为所有表达式加上括号
       如果ParentOpRank>0，会根据运算符优先级，返回尽量不带括号的结果
     }
-    function JSONToExpr(AObj: JSONObject; ParentOpRank: Integer=-1):String;
+    function JSONToExpr(AObj: TJSONObj; ParentOpRank: Integer=-1):String;
     class function VarToExprStr(V: Variant):String;
-    class function VarNeeded(AObj: JSONObject; var Vars: TStrings):Integer;
+    class function VarNeeded(AObj: TJSONObj; var Vars: TStrings):Integer;
     class function Version:ShortString;
   end;
   { 变量值获取类
@@ -376,14 +385,14 @@ type
     //Read Value
     function GetVar(const VarName: String; out Val: Variant):Boolean; virtual;
   {$IFNDEF NO_RECMEMBER}
-    function GetVar2(AObj: JSONObject; out Val: Variant):Boolean; virtual;
+    function GetVar2(AObj: TJSONObj; out Val: Variant):Boolean; virtual;
   {$ENDIF}
-    function GetVarObj(const VarName: String; out Obj: JSONObject):Boolean; virtual;
+    function GetVarObj(const VarName: String; out Obj: TJSONObj):Boolean; virtual;
     function GetVarDef(const VarName: String; const Default: Variant):Variant;
     //Write Value
     function SetVar(const VarName: String; const Val: Variant):Boolean; virtual;
   {$IFNDEF NO_RECMEMBER}
-    function SetVar2(AObj: JSONObject; const Val: Variant):Boolean; virtual;
+    function SetVar2(AObj: TJSONObj; const Val: Variant):Boolean; virtual;
   {$ENDIF}
   {$IFNDEF NO_COMPLEXOBJ}
     //Member support
@@ -391,7 +400,7 @@ type
     function LeaveObj(const ObjName: String):Boolean; virtual;
   {$ENDIF}
     function VarIsObj(const VarName: String):Boolean; virtual;
-    function SetObjectVar(const VarName: String; JObj: JSONObject):Boolean; virtual;
+    function SetObjectVar(const VarName: String; JObj: TJSONObj):Boolean; virtual;
     function SetObjVar(const VarName: String; AObj: TObject):Boolean; virtual;
     function GetObjAttr(AObj: TObject; const Attr: String):Variant; virtual;
     function SetObjAttr(AObj: TObject; const Attr: String; Val:Variant):Boolean; virtual;
@@ -403,8 +412,8 @@ type
     property VarNames[const Idx:Integer]:String read GetVarNames;
     procedure Clean; virtual;
     //JSON I/O
-    function ValImport(PlainObj: JSONObject):Integer; virtual;
-    function ValExport(PlainObj: JSONObject):Integer; virtual;
+    function ValImport(PlainObj: TJSONObj):Integer; virtual;
+    function ValExport(PlainObj: TJSONObj):Integer; virtual;
   end;
   { 函数值获取类
     可以通过传入的JSON格式的函数，提取结果值。
@@ -419,7 +428,7 @@ type
     function GetValue(Sender: TJSONExprParser; const Func: String;
       var Params: array of Variant; out Val:Variant;
       out OutParamIdx: TParamSet):Boolean; virtual;
-    function GetValue2(Sender: TJSONExprParser; FuncObj: JSONObject;
+    function GetValue2(Sender: TJSONExprParser; FuncObj: TJSONObj;
       var Params: array of Variant; out Val:Variant;
       out OutParamIdx: TParamSet):Boolean; virtual;
   end;
@@ -428,17 +437,20 @@ type
   }
   TJEOpHelper=class
   public
-    function TranslateOperator(const Op: ShortString; JNode: TZAbstractObject):ShortString; virtual; abstract;
-    function RestoreOperator(const Op: ShortString; JNode: TZAbstractObject):ShortString; virtual; abstract;
+    function TranslateOperator(const Op: ShortString; JNode: TJSONLeaf):ShortString; virtual; abstract;
+    function RestoreOperator(const Op: ShortString; JNode: TJSONLeaf):ShortString; virtual; abstract;
   end;
   TSimpleVarHelper=class(TJEVarHelper)
   private
-    FValueHolder:JSONObject;
+    FValueHolder:TJSONObj;
     FTraceOnSet: Boolean;
     FOnTrace: TTraceValueFunc;
   {$IFNDEF NO_COMPLEXOBJ}
-    FRootHolder:JSONObject;
+    FRootHolder:TJSONObj;
     FValObjStatck:TStrings;
+    {$IFDEF SUPEROBJECT}
+    FValItfs:TInterfaceList;
+    {$ENDIF}
   {$ENDIF}
     procedure SetOnTrace(const Value: TTraceValueFunc);
   protected
@@ -447,8 +459,8 @@ type
     function GetTraceOnSet: Boolean; override;
     procedure SetTraceOnSet(const Value: Boolean); override;
   {$IFNDEF NO_COMPLEXOBJ}
-    function ComplexValObjByName(const VarName: String):TZAbstractObject;
-    function ComplexValObjByNameEx(const VarName: String; out AValHolder: JSONObject):TZAbstractObject;
+    function ComplexValObjByName(const VarName: String):TJSONLeaf;
+    function ComplexValObjByNameEx(const VarName: String; out AValHolder: TJSONObj):TJSONLeaf;
   {$ENDIF}
   public
     property OnTrace:TTraceValueFunc read FOnTrace write SetOnTrace;
@@ -460,10 +472,10 @@ type
     procedure Delete(const VarName: String);
     procedure Clean; override;
     function GetVar(const VarName: String; out Val:Variant):Boolean; override;
-    function GetVarObj(const VarName: String; out Obj: JSONObject):Boolean; override;
+    function GetVarObj(const VarName: String; out Obj: TJSONObj):Boolean; override;
     function SetVar(const VarName: String; const Val: Variant):Boolean; override;
     function VarIsObj(const VarName: String):Boolean; override;
-    function SetObjectVar(const VarName: String; JObj: JSONObject):Boolean; override;
+    function SetObjectVar(const VarName: String; JObj: TJSONObj):Boolean; override;
   {$IFNDEF NO_COMPLEXOBJ}
     function EnterObj(const ObjName: String):Boolean; override;
     function LeaveObj(const ObjName: String):Boolean; override;
@@ -501,8 +513,8 @@ type
   end;
 
 function VarEqual(const v1, v2: Variant):Boolean;
-function VarToJSONObj(v: Variant):TZAbstractObject;
-function VarFromJSON(Z:TZAbstractObject):Variant;
+function VarToJSONObj(v: Variant):TJSONLeaf;
+function VarFromJSON(Z:TJSONLeaf):Variant;
 function Obj2Var(O: TObject): Variant; {$IF COMPILERVERSION>=18}inline;{$IFEND}
 function Var2Obj(V: Variant): TObject; {$IF COMPILERVERSION>=18}inline;{$IFEND}
 function IsNormalVarName(const Name: String):Boolean;
@@ -660,10 +672,72 @@ begin
   Result:=true;
 end;
 
-function VarToJSONObj(v: Variant):TZAbstractObject;
+{$IFDEF SUPEROBJECT}
+function JSONParamCount(AObj: TJSONObj):Integer;
+begin
+  Result:=0;
+  if AObj=nil then exit;
+  with AObj.GetEnumerator do
+  while Current<>nil do
+    begin
+      Inc(Result);
+      if not MoveNext then break;
+    end;
+end;
+
+var
+  _CNULL:TJSONObj=nil;
+function CNULL:TJSONObj;
+begin
+  if _CNULL=nil then
+    _CNULL:=SO('{"z":0}');
+  Result:=_CNULL;
+end;
+
+function HexToInt(const S: String): Integer;
+const HexMap:array [Char] of SmallInt =
+  (
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9,-1,-1,-1,-1,-1,-1,
+   -1,10,11,12,13,14,15,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,10,11,12,13,14,15,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,
+   -1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1,-1
+   );
+var
+  i, n, l: Integer;
+begin
+  Result:=0;
+  l:=Length(S);
+  if l=0 then exit;  
+  if S[1]='$' then
+    n:=2
+  else if (l>=2) and (S[2] in ['x','X']) then
+    n:=3
+  else
+    n:=1;
+  for i:=n to l do
+    Result:=Result*16+HexMap[S[i]];
+end;
+{$ENDIF}
+
+function VarToJSONObj(v: Variant):TJSONLeaf;
 var
   i:Integer;
 begin
+{$IFDEF SUPEROBJECT}
+  Result:=SO(v);
+{$ELSE}
   case VarType(v) of
     varNull:
       Result:=CNULL;
@@ -685,24 +759,57 @@ begin
     end;
     else
       Result:=_String.create(String(v));
-  end;  
+  end;
+{$ENDIF}
 end;
 
-procedure PutVarToJSON(JObj: JSONObject; const VarName: String; const v: Variant);
+procedure PutVarToJSON(JObj: TJSONObj; const VarName: String; const v: Variant);
 begin
+{$IFDEF SUPEROBJECT}
+  JObj.O[VarName]:=VarToJSONObj(v);
+{$ELSE}
   JObj.Put(VarName,VarToJSONObj(v));
+{$ENDIF}
 end;
 
-procedure PutObjToJSON(JObj: JSONObject; const VarName: String; Obj: JSONObject);
+procedure PutObjToJSON(JObj: TJSONObj; const VarName: String; Obj: TJSONObj);
 begin
+{$IFDEF SUPEROBJECT}
+  JObj.O[VarName]:=Obj;
+{$ELSE}
   JObj.Put(VarName,Obj);
+{$ENDIF}
 end;
 
-function VarFromJSON(Z:TZAbstractObject):Variant;
+function VarFromJSON(Z:TJSONLeaf):Variant;
 var
-  i:Integer;
+  idx:Integer;
 begin
   if Z=nil then exit;
+{$IFDEF SUPEROBJECT}
+  if Z.DataType=stString then
+    Result:=Z.AsString
+  else if Z.DataType=stString then
+    Result:=Z.AsString
+  else if Z.DataType=stInt then
+    Result:=Z.AsInteger
+  else if Z.DataType=stBoolean then
+    Result:=Z.AsBoolean
+  else if Z.DataType=stDouble then
+    Result:=Z.AsDouble
+  else if Z.DataType=stCurrency then
+    Result:=Z.AsCurrency
+  else if Z.DataType=stArray then
+  begin
+    with Z.AsArray do
+    begin
+      Result:=VarArrayCreate([0,length-1],varVariant);
+      for idx:=0 to Pred(length) do
+        Result[idx]:=VarFromJSON(O[idx]);
+    end;
+  end
+  else
+{$ELSE}
   if Z.ClassType=_String then
     Result:=Z.toString
   else if Z.ClassType=_Boolean then
@@ -716,11 +823,12 @@ begin
     with JSONArray(Z) do
     begin
       Result:=VarArrayCreate([0,length-1],varVariant);
-      for i:=0 to Pred(length) do
-        Result[i]:=VarFromJSON(get(i));
+      for idx:=0 to Pred(length) do
+        Result[idx]:=VarFromJSON(get(idx));
     end;
   end
   else
+{$ENDIF}
     Result:=Null;
 end;
 
@@ -1049,64 +1157,84 @@ begin
   FVarHelper:=AHelper;
 end;
 
-function TJSONExprParser.Eval(AObj: TZAbstractObject): Variant;
+function TJSONExprParser.Eval(AObj: TJSONLeaf): Variant;
   function GetP1:Variant;
   begin
-    Result:=Eval(JSONObject(AObj).Opt(JEP_Param1));
+    Result:=Eval(TJSONObj(AObj).{$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_Param1));
   end;
   function GetP2:Variant;
   begin
-    Result:=Eval(JSONObject(AObj).Opt(JEP_Param2));
+    Result:=Eval(TJSONObj(AObj).{$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_Param2));
   end;
   function GetP3:Variant;
   begin
-    Result:=Eval(JSONObject(AObj).Opt(JEP_ParamHeader+'3'));
+    Result:=Eval(TJSONObj(AObj).{$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_Param3));
   end;
   function GetPN(n:Integer):Variant;
   begin
-    Result:=Eval(JSONObject(AObj).Opt(JEP_ParamHeader+IntToStr(n)));
+    Result:=Eval(TJSONObj(AObj).{$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_ParamHeader+IntToStr(n)));
   end;
-  function GetParams(JObj: JSONObject):TVarAy;
+  function GetParams(JObj: TJSONObj):TVarAy;
   var
-    i:Integer;
+    i,nn:Integer;
   begin
-    with JSONObject(AObj) do
+  {$IFDEF SUPEROBJECT}
+    nn:=JSONParamCount(AObj);
+    if nn<=1 then exit;
+    SetLength(Result,nn-1);
+    i:=0;
+    with AObj.GetEnumerator do
+      repeat
+        Result[i]:=Eval(Current);
+        Inc(i);
+      until not MoveNext;
+  {$ELSE}
+    with TJSONObj(AObj) do
     begin
       if Length<=1 then exit;
       SetLength(Result,Length-1);
       for i:=0 to High(Result) do
         Result[i]:=GetPN(i);
     end;
+  {$ENDIF}
   end;
-  function GetP1Left:TZAbstractObject;
+  function GetP1Left:TJSONLeaf;
   begin
-    Result:=JSONObject(AObj).Opt(JEP_Param1);
+    Result:=TJSONObj(AObj).{$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_Param1);
     if Result=nil then exit;
-    if not (Result is JSONObject) then 
+  {$IFDEF SUPEROBJECT}
+    if Result.DataType<>stObject then
+  {$ELSE}
+    if not (Result is TJSONObj) then
+  {$ENDIF}
     begin
       Result:=nil;
       exit;
     end;
-    Result:=JSONObject(Result).Opt(JEP_Param1);
+    Result:=TJSONObj(Result).{$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_Param1);
   end;
   function Func_IN:Boolean;
   var
     i:Integer;
     NullVal:Boolean;
-    Z:TZAbstractObject;
+    Z,Z2:TJSONLeaf;
+    JObj:TJSONObj;
     v1,v2:Variant;
     vt1,vt2:Word;
   begin
     Result:=false;
     v1:=GetP1;
     NullVal:=VarIsNull(v1);
-    Z:=JSONObject(AObj).Opt(JEP_Param2);
+    Z:=TJSONObj(AObj).{$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_Param2);
     if Z=nil then exit;
-    if (Z.ClassType=JSONObject) and (JSONObject(Z).OptString(JEP_Operator)='(') then
+    if (Z.{$IFDEF SUPEROBJECT}DataType=stObject{$ELSE}ClassType=TJSONObj{$ENDIF})
+      and (TJSONObj(Z).{$IFDEF SUPEROBJECT}GetS{$ELSE}OptString{$ENDIF}(JEP_Operator)='(') then
     begin
-      for i:=1 to Pred(JSONObject(Z).Length) do
+      for i:=1 to {$IFDEF SUPEROBJECT}64{$ELSE}Pred(TJSONObj(Z).Length){$ENDIF} do
       begin
-        v2:=Eval(JSONObject(Z).Opt(JEP_ParamHeader+IntToStr(i)));
+        Z2:=TJSONObj(Z).{$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_ParamHeader+IntToStr(i));
+        {$IFDEF SUPEROBJECT}if Z2=nil then break;{$ENDIF}
+        v2:=Eval(Z2);
         if NullVal then
         begin
           if VarIsNull(v2) then
@@ -1155,13 +1283,18 @@ function TJSONExprParser.Eval(AObj: TZAbstractObject): Variant;
   end;
   function Func_Collection:Variant;
   var
-    i:Integer;
-    //P:Pointer;
+    i,n:Integer;
     v1:Variant;
   begin
-    Result:=VarArrayCreate([0,JSONObject(AObj).Length-2],varVariant);
-    //P:=VarArrayLock(Result);
-    for i:=1 to Pred(JSONObject(AObj).Length) do
+  {$IFDEF SUPEROBJECT}
+    n:=1;
+    while AObj.O[JEP_ParamHeader+IntToStr(n)]<>nil do
+      Inc(n);
+  {$ELSE}
+    n:=TJSONObj(AObj).Length;
+  {$ENDIF}
+    Result:=VarArrayCreate([0,n-2],varVariant);
+    for i:=1 to Pred(n) do
     begin
       v1:=GetPN(i);
       Result[i-1]:=v1;
@@ -1170,12 +1303,19 @@ function TJSONExprParser.Eval(AObj: TZAbstractObject): Variant;
   function Func_ArrayItem:Variant;   // A[10,2]  =>  {op:"[",p1:"A",p2:10,p3:2}
   var
     i,idx:Integer;
-    //P:Pointer;
     v1:Variant;
   begin
     Result:=GetP1;
-    for i:=2 to Pred(JSONObject(AObj).Length) do
+  {$IFDEF SUPEROBJECT}
+    i:=1;
+    while true do
     begin
+      Inc(i);
+      if AObj.O[JEP_ParamHeader+IntToStr(i)]=nil then break;
+  {$ELSE}
+    for i:=2 to Pred(TJSONObj(AObj).Length) do
+    begin
+  {$ENDIF}
       if not VarIsArray(Result) then
       begin
         if VarType(Result)=varString then  //2011-09-24  Bug fixed.
@@ -1191,7 +1331,7 @@ function TJSONExprParser.Eval(AObj: TZAbstractObject): Variant;
         exit;
       end;
       try
-        v1:=Eval(JSONObject(AObj).Opt(JEP_ParamHeader+IntToStr(i)));
+        v1:=Eval(TJSONObj(AObj).{$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_ParamHeader+IntToStr(i)));
         idx:=v1;
         if (idx>=0) and (idx<=VarArrayHighBound(Result,1)) then
           Result:=Result[idx];
@@ -1200,42 +1340,42 @@ function TJSONExprParser.Eval(AObj: TZAbstractObject): Variant;
       end;
     end;
   end;
-  procedure SetVal(Z: TZAbstractObject; Val: Variant; const PName: String=JEP_Param1);
+  procedure SetVal(Z: TJSONLeaf; Val: Variant; const PName: String=JEP_Param1);
   var
-    Z2:TZAbstractObject;
+    Z2:TJSONLeaf;
     mstr:String;
   begin
     Result:=Val;  //将右侧表达式的值做为整个赋值过程的值
-    if Z.ClassType=_String then
+    if Z.{$IFDEF SUPEROBJECT}DataType=stString{$ELSE}ClassType=_String{$ENDIF} then
     begin
-      mstr:=Z.toString;
+      mstr:=Z.{$IFDEF SUPEROBJECT}AsString{$ELSE}toString{$ENDIF};
       if mstr='' then exit;
       if not (mstr[1] in [JEP_StrParamHeader,JEP_TypeHead]) then
         VarHelper.SetVar(mstr,Result);
     end
-    else if Z.ClassType=JSONObject then  //赋值表达式的左部是复合表达式  2010-04-04
+    else if Z.{$IFDEF SUPEROBJECT}DataType=stObject{$ELSE}ClassType=TJSONObj{$ENDIF} then  //赋值表达式的左部是复合表达式  2010-04-04
     begin
-      mstr:=JSONObject(Z).ValByIndex[0];
+      mstr:={$IFDEF SUPEROBJECT}Z.S[JEP_Operator]{$ELSE}TJSONObj(Z).ValByIndex[0]{$ENDIF};
       if mstr='.' then
       begin
       {$IFDEF NO_COMPLEXOBJ}
       {$IFNDEF NO_RECMEMBER}
-        VarHelper.SetVar2(JSONObject(Z),Result);
+        VarHelper.SetVar2(TJSONObj(Z),Result);
       {$ENDIF}
       {$ELSE}
-        Z2:=JSONObject(Z).Opt(JEP_Param1);
-        if Z2 is _String then
+        Z2:=TJSONObj(Z).{$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_Param1);
+        if Z2{$IFDEF SUPEROBJECT}.DataType=stString{$ELSE}is TJSONObj{$ENDIF} then
         begin
           with VarHelper do
           begin
-            if EnterObj(Z2.toString) then
+            if EnterObj(Z2.{$IFDEF SUPEROBJECT}AsString{$ELSE}toString{$ENDIF}) then
             begin
-              SetVar(JSONObject(Z).OptString(JEP_Param2),Result);
+              SetVar(TJSONObj(Z).{$IFDEF SUPEROBJECT}GetS{$ELSE}OptString{$ENDIF}(JEP_Param2),Result);
               LeaveObj('');
             end;
           end;
         end
-        else if Z2 is JSONObject then
+        else if Z2{$IFDEF SUPEROBJECT}.DataType=stObject{$ELSE}is TJSONObj{$ENDIF} then
         begin
 
         end;
@@ -1245,15 +1385,15 @@ function TJSONExprParser.Eval(AObj: TZAbstractObject): Variant;
   end;
   procedure SetValue(Val: Variant; const PName: String=JEP_Param1);
   begin
-    SetVal(JSONObject(AObj).Opt(PName),Val);  //将右侧表达式的值做为整个赋值过程的值
+    SetVal(TJSONObj(AObj).{$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(PName),Val);  //将右侧表达式的值做为整个赋值过程的值
   end;
-  procedure IncVal(AObj: TZAbstractObject; Val: Variant);
+  procedure IncVal(AObj: TJSONLeaf; Val: Variant);
   begin
     SetVal(AObj,Eval(AObj)+Val);
   end;
   function DoEval(const ExprStr: String):Variant;
   var
-    JObj:JSONObject;
+    JObj:TJSONObj;
   begin
     Result:=Null;
     if ExprStr='' then exit;
@@ -1263,7 +1403,7 @@ function TJSONExprParser.Eval(AObj: TZAbstractObject): Variant;
       try
         Result:=Eval(JObj);
       finally
-        JObj.Free;
+        JObj{$IFDEF SUPEROBJECT}:=nil{$ELSE}.Free{$ENDIF};
       end;
     except
     end;
@@ -1275,17 +1415,17 @@ var
   VParams:TVarAy;
   OutSet:TParamSet;
   Done:Boolean;
-  Z,Z2:TZAbstractObject;
+  Z,Z2:TJSONLeaf;
   ParamCnt,i,n,c,EndVal,StepVal:Integer;
   w1,w2,w3,w4,w5,w6,w7:Word;
 begin
   Result:=Null;
   if AObj=nil then exit;
-  if AObj.ClassType<>JSONObject then
+  if AObj.{$IFDEF SUPEROBJECT}DataType<>stObject{$ELSE}ClassType<>TJSONObj{$ENDIF} then
   begin
-    if AObj.ClassType=_String then
+    if AObj.{$IFDEF SUPEROBJECT}DataType=stString{$ELSE}ClassType=_String{$ENDIF} then
     begin
-      mstr:=_String(AObj).toString;
+      mstr:={$IFDEF SUPEROBJECT}AObj.AsString{$ELSE}_String(AObj).toString{$ENDIF};
       if (mstr<>'') and not (mstr[1] in [JEP_StrParamHeader,JEP_TypeHead]) then  //变量名
       begin
         if VarHelper<>nil then
@@ -1296,28 +1436,32 @@ begin
       else
         Result:=TypeStrToVar(mstr);
     end
-    else if AObj.ClassType=_Boolean then
-      Result:=_Boolean(AObj).boolValue
-    else if AObj is _Number then
-      Result:=_Number(AObj).doubleValue;
+    else if AObj.{$IFDEF SUPEROBJECT}DataType=stString{$ELSE}ClassType=_Boolean{$ENDIF} then
+      Result:={$IFDEF SUPEROBJECT}AObj.AsBoolean{$ELSE}_Boolean(AObj).boolValue{$ENDIF}
+    else if AObj{$IFDEF SUPEROBJECT}.DataType in [stDouble,stCurrency,stInt]{$ELSE}is _Number{$ENDIF} then
+      Result:={$IFDEF SUPEROBJECT}AObj.AsDouble{$ELSE}_Number(AObj).doubleValue{$ENDIF};
     exit;
   end;
-  with JSONObject(AObj) do
+  with TJSONObj(AObj) do
   begin
+  {$IFDEF SUPEROBJECT}
+    ParamCnt:=JSONParamCount(AObj)-1;
+  {$ELSE}
     ParamCnt:=Length-1;
+  {$ENDIF}
     if ParamCnt<0 then exit;  //不含任何数据
-    Z:=ValObjByIndex[0];  //第一个成员，应当是 BIOS_Operator
+    Z:={$IFDEF SUPEROBJECT}O[JEP_Operator]{$ELSE}ValObjByIndex[0]{$ENDIF};  //第一个成员，应当是 BIOS_Operator
   end;
-  if (Z<>nil) and (Z.ClassType=JSONObject) then  //操作符是JSON对象
+  if (Z<>nil) and (Z.{$IFDEF SUPEROBJECT}DataType=stObject{$ELSE}ClassType=TJSONObj{$ENDIF}) then  //操作符是JSON对象
   begin
     if FuncHelper<>nil then
     begin
-      case JSONObject(AObj).Length of
+      case ParamCnt+1{TJSONObj(AObj).Length} of
         2:
         begin
           SetLength(VParams,1);
           VParams[0]:=GetP1;  //[GetP1];
-          FuncHelper.GetValue2(Self,JSONObject(Z),VParams,Result,OutSet);
+          FuncHelper.GetValue2(Self,TJSONObj(Z),VParams,Result,OutSet);
           if OutSet<>[] then  //Write back Out Param   2010-08-12
             SetValue(VParams[0]);
           SetLength(VParams,0);
@@ -1327,7 +1471,7 @@ begin
           SetLength(VParams,2);
           VParams[0]:=GetP1;  //[GetP1,GetP2];
           VParams[1]:=GetP2;
-          FuncHelper.GetValue2(Self,JSONObject(Z),VParams,Result,OutSet);
+          FuncHelper.GetValue2(Self,TJSONObj(Z),VParams,Result,OutSet);
           if OutSet<>[] then
           begin
             if pi1 in OutSet then
@@ -1339,8 +1483,8 @@ begin
         end;
         else
         begin
-          VParams:=GetParams(JSONObject(AObj));
-          FuncHelper.GetValue2(Self,JSONObject(Z),VParams,Result,OutSet);
+          VParams:=GetParams(TJSONObj(AObj));
+          FuncHelper.GetValue2(Self,TJSONObj(Z),VParams,Result,OutSet);
           if OutSet<>[] then
           begin
             for i:=Integer(Low(TParamIdxs)) to Integer(High(TParamIdxs)) do
@@ -1357,7 +1501,7 @@ begin
   if Z=nil then
     Func:=''
   else
-    Func:=Z.toString;
+    Func:=Z.{$IFDEF SUPEROBJECT}AsString{$ELSE}toString{$ENDIF};
   if Func='' then  //如果操作符为空，就用第一个参数的值
   begin
     if ParamCnt>1 then  //无操作符，但有多个参数，说明是集合  (A,B,...)  2011-09-22
@@ -1380,14 +1524,14 @@ begin
           begin
           {$IFDEF NO_COMPLEXOBJ}
           {$IFNDEF NO_RECMEMBER}
-            VarHelper.GetVar2(JSONObject(AObj),Result);
+            VarHelper.GetVar2(TJSONObj(AObj),Result);
           {$ENDIF}
           {$ELSE}
-            Z2:=JSONObject(AObj).Opt(JEP_Param1);
-            if Z2 is _String then
+            Z2:=TJSONObj(AObj).{$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_Param1);
+            if Z2{$IFDEF SUPEROBJECT}.DataType=stString{$ELSE} is _String{$ENDIF} then
             begin
               with VarHelper do
-                if EnterObj(Z2.toString) then
+                if EnterObj(Z2.{$IFDEF SUPEROBJECT}AsString{$ELSE}toString{$ENDIF}) then
                 begin
                   Result:=GetP2;
                   LeaveObj('');
@@ -1403,25 +1547,25 @@ begin
           begin
             //尽量获取后面那个表达式的值，如果只有一个表达式，那就获取第一个表达式的值
             //eg:  X:=10; Y:=3; X*Y-9   => 21
-            n:=JSONObject(AObj).Length;
+            n:=ParamCnt+1{TJSONObj(AObj).Length};
             if n>2 then
             begin
               Result:=GetP1;
             {$IFNDEF NO_TRACE}
               if TraceOnLine then
               begin
-                Z:=JSONObject(AObj).Opt(JEP_Param1);
+                Z:=TJSONObj(AObj).{$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_Param1);
                 if Assigned(FOnLineComplete) then
-                  FOnLineComplete(Self,JSONObject(Z),Result);
+                  FOnLineComplete(Self,TJSONObj(Z),Result);
               end;
             {$ENDIF}
               Result:=GetP2;
             {$IFNDEF NO_TRACE}
               if TraceOnLine then
               begin
-                Z:=JSONObject(AObj).Opt(JEP_Param2);
+                Z:=TJSONObj(AObj).{$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_Param2);
                 if Assigned(FOnLineComplete) then
-                  FOnLineComplete(Self,JSONObject(Z),Result);
+                  FOnLineComplete(Self,TJSONObj(Z),Result);
               end;
             {$ENDIF}
               //允许 ; 表达式有多于两个的参数  2010-6-27
@@ -1431,9 +1575,9 @@ begin
               {$IFNDEF NO_TRACE}
                 if TraceOnLine then
                 begin
-                  Z:=JSONObject(AObj).Opt(JEP_ParamHeader+IntToStr(i));
+                  Z:=TJSONObj(AObj).{$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_ParamHeader+IntToStr(i));
                   if Assigned(FOnLineComplete) then
-                    FOnLineComplete(Self,JSONObject(Z),Result);
+                    FOnLineComplete(Self,TJSONObj(Z),Result);
                 end;
               {$ENDIF}
               end;
@@ -1443,9 +1587,9 @@ begin
             {$IFNDEF NO_TRACE}
               if TraceOnLine then
               begin
-                Z:=JSONObject(AObj).Opt(JEP_Param1);
+                Z:=TJSONObj(AObj).{$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_Param1);
                 if Assigned(FOnLineComplete) then
-                  FOnLineComplete(Self,JSONObject(Z),Result);
+                  FOnLineComplete(Self,TJSONObj(Z),Result);
               end;
             {$ENDIF}
             end;
@@ -1953,7 +2097,7 @@ begin
           'B':
             if Func=JEF_Break then
             begin
-              Z:=JSONObject(AObj).Opt(JEP_Param1);
+              Z:=TJSONObj(AObj).{$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_Param1);
               if Z=nil then
                 raise TBreakException.Create //跳出循环结构
               else
@@ -2197,7 +2341,7 @@ begin
           'F':
             if Func=JEF_ForEach then
             begin
-              Z:=JSONObject(AObj).Opt(JEP_Param1);
+              Z:=TJSONObj(AObj).{$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_Param1);
               v2:=GetP2;
               if VarIsArray(v2) then
               begin
@@ -2273,7 +2417,7 @@ begin
           'C':
             if Func=JEF_Continue then  //2011-09-24
             begin
-              Z:=JSONObject(AObj).Opt(JEP_Param1);
+              Z:=TJSONObj(AObj).{$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_Param1);
               if Z=nil then
                 raise TContinueException.Create  //产生异常，跳出循环结构
               else
@@ -2330,7 +2474,7 @@ begin
     end;
     if Done then exit;
     if FuncHelper<>nil then
-      case JSONObject(AObj).Length of
+      case ParamCnt+1 of
         2: //FuncHelper.GetValue(Self,Func,[GetP1],Result,OutSet);
         begin
           SetLength(VParams,1);
@@ -2355,8 +2499,8 @@ begin
           end;
           SetLength(VParams,0);
         end;
-        else begin //FuncHelper.GetValue(Self,Func,GetParams(JSONObject(AObj)),Result,OutSet);
-          VParams:=GetParams(JSONObject(AObj));
+        else begin //FuncHelper.GetValue(Self,Func,GetParams(TJSONObj(AObj)),Result,OutSet);
+          VParams:=GetParams(TJSONObj(AObj));
           FuncHelper.GetValue(Self,Func,VParams,Result,OutSet);
           if OutSet<>[] then
           begin
@@ -2386,49 +2530,50 @@ begin
   end;
 end;
 
-function TJSONExprParser.EvalNumber(AObj: TZAbstractObject; out Val: Double):Boolean;
+function TJSONExprParser.EvalNumber(AObj: TJSONLeaf; out Val: Double):Boolean;
   function GetP1(var OK: Boolean):Double;
   begin
-    OK:=EvalNumber(JSONObject(AObj).Opt(JEP_Param1),Result);
+    OK:=EvalNumber(TJSONObj(AObj).{$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_Param1),Result);
   end;
   function GetP2(var OK: Boolean):Double;
   begin
-    OK:=EvalNumber(JSONObject(AObj).Opt(JEP_Param2),Result);
+    OK:=EvalNumber(TJSONObj(AObj).{$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_Param2),Result);
   end;
   function GetPN(n:Integer; var OK: Boolean):Double;
   begin
-    OK:=EvalNumber(JSONObject(AObj).Opt(JEP_ParamHeader+IntToStr(n)),Result);
+    OK:=EvalNumber(TJSONObj(AObj).{$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_ParamHeader+IntToStr(n)),Result);
   end;
-  function GetParams(JObj: JSONObject; var OK: Boolean):TVarAy;
+  function GetParams(JObj: TJSONObj; var OK: Boolean):TVarAy;
   var
-    i:Integer;
+    k,Len:Integer;
     f:Double;
   begin
-    with JSONObject(AObj) do
+    with TJSONObj(AObj) do
     begin
-      if Length<=1 then exit;
-      SetLength(Result,Length-1);
-      for i:=0 to High(Result) do
+      Len:={$IFDEF SUPEROBJECT}JSONParamCount(AObj){$ELSE}Length{$ENDIF};
+      if Len<=1 then exit;
+      SetLength(Result,Len-1);
+      for k:=0 to High(Result) do
       begin
-        f:=GetPN(i,OK);
+        f:=GetPN(k,OK);
         if not OK then exit;
-        Result[i]:=f;
+        Result[k]:=f;
       end;
     end;
   end;
   procedure SetValue;
   var
-    Z:TZAbstractObject;
+    Z:TJSONLeaf;
     mstr:String;
   begin
     Val:=GetP2(Result);  //将右侧表达式的值做为整个赋值过程的值
     if not Result then exit;
-    Z:=JSONObject(AObj).Opt(JEP_Param1);
+    Z:=TJSONObj(AObj).{$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_Param1);
     if Z<>nil then
     begin
-      if Z.ClassType=_String then
+      if Z.{$IFDEF SUPEROBJECT}DataType=stString{$ELSE}ClassType=_String{$ENDIF} then
       begin
-        mstr:=Z.toString;
+        mstr:=Z.{$IFDEF SUPEROBJECT}AsString{$ELSE}toString{$ENDIF};
         if mstr='' then exit;
         if mstr[1]<>JEP_StrParamHeader {in VarBegin} then
           VarHelper.SetVar(mstr,Val);
@@ -2444,16 +2589,16 @@ var
   OutSet:TParamSet;
   v1,v2:Double;
   Done:Boolean;
-  Z:TZAbstractObject;
+  Z:TJSONLeaf;
   i,n:Integer;
 begin
   Result:=false;
   if AObj=nil then exit;
-  if AObj.ClassType<>JSONObject then
+  if AObj.{$IFDEF SUPEROBJECT}DataType<>stObject{$ELSE}ClassType<>TJSONObj{$ENDIF} then
   begin
-    if AObj.ClassType=_String then
+    if AObj.{$IFDEF SUPEROBJECT}DataType=stString{$ELSE}ClassType=_String{$ENDIF} then
     begin
-      mstr:=_String(AObj).toString;
+      mstr:={$IFDEF SUPEROBJECT}AObj.AsString{$ELSE}_String(AObj).toString{$ENDIF};
       if (mstr<>'') and (mstr[1]<>JEP_StrParamHeader) then  //变量名
       begin
         if VarHelper<>nil then
@@ -2462,20 +2607,20 @@ begin
         Result:=true;
       end;
     end
-    else if AObj is _Number then
+    else if AObj{$IFDEF SUPEROBJECT}.DataType in [stDouble,stCurrency,stInt]{$ELSE}is _Number{$ENDIF} then
     begin
-      Val:=_Number(AObj).doubleValue;
+      Val:={$IFDEF SUPEROBJECT}AObj.AsDouble{$ELSE}_Number(AObj).doubleValue{$ENDIF};
       Result:=true;
     end;
     exit;
   end;
-  Z:=JSONObject(AObj).ValObjByIndex[0];  //第一个成员，应当是 BIOS_Operator
-  if (Z<>nil) and (Z.ClassType=JSONObject) then  //操作符是JSON对象
+  Z:=TJSONObj(AObj).{$IFDEF SUPEROBJECT}O[JEP_Operator]{$ELSE}ValObjByIndex[0]{$ENDIF};  //第一个成员，应当是 BIOS_Operator
+  if (Z<>nil) and (Z.{$IFDEF SUPEROBJECT}DataType=stObject{$ELSE}ClassType=TJSONObj{$ENDIF}) then  //操作符是JSON对象
     exit;
   if Z=nil then
     Func:=''
   else
-    Func:=Z.toString;
+    Func:=Z.{$IFDEF SUPEROBJECT}AsString{$ELSE}toString{$ENDIF};
   if Func='' then  //如果操作符为空，就用第一个参数的值
   begin
     Val:=GetP1(Result);
@@ -2491,7 +2636,22 @@ begin
         if F1=';' then
         begin
           //同上
-          n:=JSONObject(AObj).Length;
+        {$IFDEF SUPEROBJECT}
+          i:=1;
+          while true do
+          begin
+            Z:=AObj.O[JEP_ParamHeader+IntToStr(i)];
+            if Z=nil then
+            begin
+              if i=1 then
+                Result:=Null;
+              break;
+            end;
+            Val:=Eval(Z);
+            Inc(i);
+          end;
+        {$ELSE}
+          n:=TJSONObj(AObj).Length;
           if n>2 then
           begin
             GetP1(Result);
@@ -2502,6 +2662,7 @@ begin
           end
           else
             Val:=GetP1(Result);
+        {$ENDIF}
           exit;
         end;
         Result:=true;
@@ -2535,7 +2696,7 @@ begin
             begin
             {$IFDEF NO_COMPLEXOBJ}
             {$IFNDEF NO_RECMEMBER}
-              Result:=VarHelper.GetVar2(JSONObject(AObj),v);
+              Result:=VarHelper.GetVar2(TJSONObj(AObj),v);
             {$ENDIF}
             {$ELSE}
               with VarHelper do
@@ -2580,7 +2741,7 @@ begin
   if Done or not Result then exit;
   if FuncHelper<>nil then
   begin
-    case JSONObject(AObj).Length of
+    case {$IFDEF SUPEROBJECT}JSONParamCount(AObj){$ELSE}TJSONObj(AObj).Length{$ENDIF} of
       2:
       begin
         v1:=GetP1(Result);
@@ -2606,7 +2767,7 @@ begin
         end;
       end;
       else begin
-        va:=GetParams(JSONObject(AObj),Result);
+        va:=GetParams(TJSONObj(AObj),Result);
         if Result then
           Result:=FuncHelper.GetValue(Self,Func,va,v,OutSet);
       end;
@@ -2617,12 +2778,12 @@ begin
 end;
 
 function TJSONExprParser.ExprToJSON(const Expr: String;
-  PStart, PEnd, POutExprLen: PInteger): JSONObject;
+  PStart, PEnd, POutExprLen: PInteger): TJSONObj;
 label DoAddOp;
 type
   TAddMode=(amNone, amBlock, amFunc, amOperator, amBlockOp);
   TLevelRec=record
-    Obj:TZAbstractObject;
+    Obj:TJSONLeaf;
     BC:Integer;  //Block depth in eath level.  括号层级
     OpCh:Char;   //各个层次的操作符首字符  如果是普通函数或者没有操作符，就是#0
     Rank:Byte; //操作符优先级
@@ -2649,7 +2810,7 @@ var
   begin
     Result:=JLevel;
     with Levels[JLevel] do
-    if (Obj=nil) or (Obj.ClassType=JSONObject) then exit;
+    if (Obj=nil) or (Obj.{$IFDEF SUPEROBJECT}DataType=stObject{$ELSE}ClassType=TJSONObj{$ENDIF}) then exit;
     if Result>0 then Dec(Result);
   end;
   function FuncLevel:Integer;
@@ -2699,7 +2860,7 @@ var
         Dec(Result);
         if Result<0 then break;
         if Levels[Result].OpCh=OpCh_Func then continue; //函数优先级最高，无需比较
-        Op:=JSONObject(Levels[Result].Obj).OptString(JEP_Operator);
+        Op:=TJSONObj(Levels[Result].Obj).{$IFDEF SUPEROBJECT}GetS{$ELSE}OptString{$ENDIF}(JEP_Operator);
         if Op<>'' then
         begin
           Ch:=Op[1];
@@ -2713,7 +2874,7 @@ var
       begin
         Dec(Result);
         if Result<0 then break;
-        Op:=JSONObject(Levels[Result].Obj).OptString(JEP_Operator);
+        Op:=TJSONObj(Levels[Result].Obj).{$IFDEF SUPEROBJECT}GetS{$ELSE}OptString{$ENDIF}(JEP_Operator);
         if Op<>'' then
           if GetStdOpRank(Op[1],Op)<Rank then break;
       end;
@@ -2721,17 +2882,17 @@ var
   end;
   procedure WriteEmpty;
   var
-    e,n:Integer;
+    e,Len:Integer;
   begin
     e:=ExprLevel;
-    with JSONObject(Levels[e].Obj) do
+    with TJSONObj(Levels[e].Obj) do
     begin
-      n:=Length;
-      Put(JEP_ParamHeader+IntToStr(n),null);
+      Len:={$IFDEF SUPEROBJECT}JSONParamCount(Levels[e].Obj){$ELSE}Length{$ENDIF};
+      {$IFDEF SUPEROBJECT}O[JEP_ParamHeader+IntToStr(Len)]:=nil{$ELSE}Put(JEP_ParamHeader+IntToStr(Len),null){$ENDIF};
       JLevel:=e+1;
       with Levels[JLevel] do
       begin
-        Obj:=ValObjByIndex[n];
+        Obj:={$IFDEF SUPEROBJECT}O[JEP_ParamHeader+IntToStr(Len-1)]{$ELSE}ValObjByIndex[Len]{$ENDIF};
         BC:=BlockCnt;
         OpCh:=OpCh_None;
         Rank:=0;
@@ -2740,17 +2901,17 @@ var
   end;
   procedure WriteFloat(F: Double);
   var
-    e,n:Integer;
+    e,Len:Integer;
   begin
     e:=ExprLevel;
-    with JSONObject(Levels[e].Obj) do
+    with TJSONObj(Levels[e].Obj) do
     begin
-      n:=Length;
-      Put(JEP_ParamHeader+IntToStr(n),F);
+      Len:={$IFDEF SUPEROBJECT}JSONParamCount(Levels[e].Obj){$ELSE}Length{$ENDIF};
+      {$IFDEF SUPEROBJECT}D[JEP_ParamHeader+IntToStr(Len)]:=F{$ELSE}Put(JEP_ParamHeader+IntToStr(Len),F){$ENDIF};
       JLevel:=e+1;
       with Levels[JLevel] do
       begin
-        Obj:=ValObjByIndex[n];
+        Obj:={$IFDEF SUPEROBJECT}O[JEP_ParamHeader+IntToStr(Len-1)]{$ELSE}ValObjByIndex[Len]{$ENDIF};
         BC:=BlockCnt;
         OpCh:=OpCh_None;
         Rank:=0;
@@ -2759,42 +2920,42 @@ var
   end;
   procedure WriteObjStr(const S: String);
   var
-    e,n:Integer;
-    J:JSONObject;
+    e,Len:Integer;
+    J:TJSONObj;
   begin
     try
-      J:=JSONObject.Create(S);
+      J:={$IFDEF SUPEROBJECT}SO(S){$ELSE}TJSONObj.Create(S){$ENDIF};
     except
       exit;
     end;
     e:=ExprLevel;
-    with JSONObject(Levels[e].Obj) do
+    with TJSONObj(Levels[e].Obj) do
     begin
-      n:=Length;
-      Put(JEP_ParamHeader+IntToStr(n),J);
+      Len:={$IFDEF SUPEROBJECT}JSONParamCount(Levels[e].Obj){$ELSE}Length{$ENDIF};
+      {$IFDEF SUPEROBJECT}O[JEP_ParamHeader+IntToStr(Len)]:=J{$ELSE}Put(JEP_ParamHeader+IntToStr(Len),J){$ENDIF};
       JLevel:=e+1;
       with Levels[JLevel] do
       begin
-        Obj:=ValObjByIndex[n];
+        Obj:={$IFDEF SUPEROBJECT}O[JEP_ParamHeader+IntToStr(Len-1)]{$ELSE}ValObjByIndex[Len]{$ENDIF};
         BC:=BlockCnt;
         OpCh:=OpCh_None;
         Rank:=0;
       end;
     end;
   end;
-  procedure WriteBool(B: Boolean);
+  procedure WriteBool(ABool: Boolean);
   var
-    e,n:Integer;
+    e,Len:Integer;
   begin
     e:=ExprLevel;
-    with JSONObject(Levels[e].Obj) do
+    with TJSONObj(Levels[e].Obj) do
     begin
-      n:=Length;
-      Put(JEP_ParamHeader+IntToStr(n),B);
+      Len:={$IFDEF SUPEROBJECT}JSONParamCount(Levels[e].Obj){$ELSE}Length{$ENDIF};
+      {$IFDEF SUPEROBJECT}B[JEP_ParamHeader+IntToStr(Len)]:=ABool{$ELSE}Put(JEP_ParamHeader+IntToStr(Len),ABool){$ENDIF};
       JLevel:=e+1;
       with Levels[JLevel] do
       begin
-        Obj:=ValObjByIndex[n];
+        Obj:={$IFDEF SUPEROBJECT}O[JEP_ParamHeader+IntToStr(Len-1)]{$ELSE}ValObjByIndex[Len]{$ENDIF};
         BC:=BlockCnt;
         OpCh:=OpCh_None;
         Rank:=0;
@@ -2803,17 +2964,17 @@ var
   end;
   procedure WriteNull;
   var
-    e,n:Integer;
+    e,Len:Integer;
   begin
     e:=ExprLevel;
-    with JSONObject(Levels[e].Obj) do
+    with TJSONObj(Levels[e].Obj) do
     begin
-      n:=Length;
-      Put(JEP_ParamHeader+IntToStr(n),CNULL);
+      Len:={$IFDEF SUPEROBJECT}JSONParamCount(Levels[e].Obj){$ELSE}Length{$ENDIF};
+      {$IFDEF SUPEROBJECT}O[JEP_ParamHeader+IntToStr(Len)]:=CNULL{$ELSE}Put(JEP_ParamHeader+IntToStr(Len),CNULL){$ENDIF};
       JLevel:=e+1;
       with Levels[JLevel] do
       begin
-        Obj:=ValObjByIndex[n];
+        Obj:={$IFDEF SUPEROBJECT}O[JEP_ParamHeader+IntToStr(Len-1)]{$ELSE}ValObjByIndex[Len]{$ENDIF};
         BC:=BlockCnt;
         OpCh:=OpCh_None;
         Rank:=0;
@@ -2822,48 +2983,49 @@ var
   end;
   procedure PushEmptyItem;
   var
-    e,n:Integer;
+    e,Len:Integer;
   begin
     e:=ExprLevel;
-    with JSONObject(Levels[e].Obj) do
+    with TJSONObj(Levels[e].Obj) do
     begin
-      n:=Length;
-      Put(JEP_ParamHeader+IntToStr(n),JE_EmptyItemStr);
+      Len:={$IFDEF SUPEROBJECT}JSONParamCount(Levels[e].Obj){$ELSE}Length{$ENDIF};
+      {$IFDEF SUPEROBJECT}S[JEP_ParamHeader+IntToStr(Len)]:=JE_EmptyItemStr{$ELSE}Put(JEP_ParamHeader+IntToStr(Len),JE_EmptyItemStr){$ENDIF};
       JLevel:=e+1;
       with Levels[JLevel] do
       begin
-        Obj:=ValObjByIndex[n];
+        Obj:={$IFDEF SUPEROBJECT}O[JEP_ParamHeader+IntToStr(Len-1)]{$ELSE}ValObjByIndex[Len]{$ENDIF};
         BC:=BlockCnt;
         OpCh:=OpCh_None;
         Rank:=0;
       end;
     end;
   end;
-  function NewFuncObj(const AFunc: String):JSONObject; {$IF COMPILERVERSION>=18}inline;{$IFEND}
+  function NewFuncObj(const AFunc: String):TJSONObj; {$IF COMPILERVERSION>=18}inline;{$IFEND}
   begin
-    Result:=JSONObject.Create.Put(JEP_Operator,AFunc);
+    Result:={$IFDEF SUPEROBJECT}SO('{"'+JEP_Operator+'":"'+AFunc+'"}'){$ELSE}TJSONObj.Create.Put(JEP_Operator,AFunc){$ENDIF};
   end;
   function WritePerfix(const Perfix: String; const IsEnd: Boolean):Boolean;
   var
-    e,n,i:Integer;
+    e,Len,idx:Integer;
     mstr,KeyStr:String;
-    Z,Z2:TZAbstractObject;
+    Z,Z2:TJSONLeaf;
   begin
     e:=ExprLevel;
-    with JSONObject(Levels[e].Obj) do
+    with TJSONObj(Levels[e].Obj) do
     begin
-      n:=Length;
-      mstr:=OptString(JEP_Operator);
+      Len:={$IFDEF SUPEROBJECT}JSONParamCount(Levels[e].Obj){$ELSE}Length{$ENDIF};
+      mstr:={$IFDEF SUPEROBJECT}GetS{$ELSE}OptString{$ENDIF}(JEP_Operator);
       if mstr<>'' then  //有操作符 -- 可能是  ... ; var X ...
       begin
         if mstr<>' ' then        
         begin
           //将最后一个提取出来
-          KeyStr:=KeyByIndex[Length-1];  //类型指示符
+          //  类型指示符
+          KeyStr:={$IFDEF SUPEROBJECT}JEP_ParamHeader+IntToStr(Len-1){$ELSE}KeyByIndex[Len-1]{$ENDIF};
           Levels[JLevel].Obj:=NewFuncObj(' ');
-          Z:=Remove(KeyStr);
-          JSONObject(Levels[JLevel].Obj).Put(JEP_Param1,Z);
-          Put(KeyStr,Levels[JLevel].Obj);
+          {$IFDEF SUPEROBJECT}Z:=O[KeyStr];O[KeyStr]:=nil{$ELSE}Z:=Remove(KeyStr){$ENDIF};
+          TJSONObj(Levels[JLevel].Obj).{$IFDEF SUPEROBJECT}PutO{$ELSE}Put{$ENDIF}(JEP_Param1,Z);
+          {$IFDEF SUPEROBJECT}PutO{$ELSE}Put{$ENDIF}(KeyStr,Levels[JLevel].Obj);
           Inc(JLevel);
           with Levels[JLevel] do
           begin
@@ -2880,34 +3042,36 @@ var
         end;
       end;
       if not IsEnd then
-        Put(JEP_ParamHeader+IntToStr(n),Perfix)
+        {$IFDEF SUPEROBJECT}PutS{$ELSE}Put{$ENDIF}(JEP_ParamHeader+IntToStr(Len),Perfix)
       else begin
-        if length>1 then
+        if Len{length}>1 then
         begin
           //将修饰符转化为 perfix （数组）
           //如 'private const' -> {op:"",p1:"public",p2:"const"}
           //转化为: {op:" const",pf:["private"], p1:"A", ....... }
-          KeyStr:=KeyByIndex[Length-1];  //类型指示符
-          mstr:=' '+OptString(KeyStr);
-          Put(JEP_Operator,mstr);
-          CleanKey(KeyStr);
-          if Length>1 then
+          //  类型指示符
+          KeyStr:={$IFDEF SUPEROBJECT}JEP_ParamHeader+IntToStr(Len-1){$ELSE}KeyByIndex[Len-1]{$ENDIF};
+          mstr:=' '+{$IFDEF SUPEROBJECT}GetS{$ELSE}OptString{$ENDIF}(KeyStr);
+          {$IFDEF SUPEROBJECT}PutS{$ELSE}Put{$ENDIF}(JEP_Operator,mstr);
+          {$IFDEF SUPEROBJECT}O[KeyStr]:=nil{$ELSE}CleanKey(KeyStr){$ENDIF};
+          Len:={$IFDEF SUPEROBJECT}JSONParamCount(Levels[e].Obj){$ELSE}Length{$ENDIF};
+          if Len>1 then
           begin
-            Z:=JSONArray.Create;
-            for i:=1 to length-1 do
+            Z:={$IFDEF SUPEROBJECT}SO('[]'){$ELSE}JSONArray.Create{$ENDIF};
+            for idx:=1 to Len-1 do
             begin
-              Z2:=Remove(JEP_ParamHeader+IntToStr(i));
+              Z2:={$IFDEF SUPEROBJECT}Delete{$ELSE}Remove{$ENDIF}(JEP_ParamHeader+IntToStr(idx));
               if Z2<>nil then
-                JSONArray(Z).put(Z2);
+                {$IFDEF SUPEROBJECT}Z.AsArray.Add{$ELSE}JSONArray(Z).put{$ENDIF}(Z2);
             end;
-            Put(JEP_Perfix,Z);
+            {$IFDEF SUPEROBJECT}PutO{$ELSE}Put{$ENDIF}(JEP_Perfix,Z);
           end;
           with Levels[e] do
           begin
             OpCh:=OpCh_Define;
             Rank:=OpRank[OpCh_Define];
           end;
-          Put(JEP_Param1,Perfix);
+          {$IFDEF SUPEROBJECT}PutS{$ELSE}Put{$ENDIF}(JEP_Param1,Perfix);
           with Levels[JLevel] do
           begin
             OpCh:=OpCh_Define;
@@ -2932,9 +3096,9 @@ var
   procedure AddOp({$IFDEF NO_OPTRANSLATE}const {$ENDIF}Func: String; AddMode: TAddMode=amOperator; UsePiror: Boolean=false);
   var
     IsEmpty:Boolean;
-    i,n:Integer;
-    Z,Z2:TZAbstractObject;
-    J,JP,JN:JSONObject;
+    idx,nn,Len:Integer;
+    Z,Z2:TJSONLeaf;
+    J,JP,JN:TJSONObj;
     mstr:String;
     MyRank:Byte;
     label CommonCase;
@@ -2949,44 +3113,61 @@ var
     else
       MyRank:=0;
     //最后一个Symbol是简单值或变量的情况 -- 应n当将其提升，嵌入到Func表达式内
-    if Levels[JLevel].Obj.ClassType<>JSONObject then
+    if Levels[JLevel].Obj.{$IFDEF SUPEROBJECT}DataType<>stObject{$ELSE}ClassType<>TJSONObj{$ENDIF} then
     begin
       //简单变量后跟双目操作符
       if UsePiror then
       begin
-        n:=JLevel-1;
-        JP:=JSONObject(Levels[n].Obj); //表达式JSON对象
+        nn:=JLevel-1;
+        JP:=TJSONObj(Levels[nn].Obj); //表达式JSON对象
         //没有操作符的表达式 -- 填入Func
-        if Levels[n].OpCh=OpCh_None then
+        if Levels[nn].OpCh=OpCh_None then
         begin
           //处理 ... var A:... 的情况  2011-09-18
           with JP do
-            if length>2 then
+          begin
+            Len:={$IFDEF SUPEROBJECT}JSONParamCount(JP){$ELSE}Length{$ENDIF};
+            if Len>2 then
             begin
               //将修饰符转化为 perfix （数组）
               //如 'private const A' -> {op:"",p1:"public",p2:"const",p3:"A"}
               //转化为: {op:" const",pf:["private"], pn:"A", ....... }
               //倒数第二个是类型指示符
-              mstr:=' '+ValByIndex[Length-2];
-              Put(JEP_Operator,mstr);
-              Delete(length-2);
-              if Length>2 then
+              mstr:=' '+{$IFDEF SUPEROBJECT}S[JEP_ParamHeader+IntToStr(Len-2)]{$ELSE}ValByIndex[Len-2]{$ENDIF};
+              {$IFDEF SUPEROBJECT}PutS{$ELSE}Put{$ENDIF}(JEP_Operator,mstr);
+            {$IFDEF SUPEROBJECT}
+              O[JEP_ParamHeader+IntToStr(JSONParamCount(JP)-2)]:=nil;
+            {$ELSE}
+              Delete(Length-2);
+            {$ENDIF}
+              Len:={$IFDEF SUPEROBJECT}JSONParamCount(JP){$ELSE}Length{$ENDIF};
+              if Len>2 then
               begin
-                Z:=JSONArray.Create;
-                for i:=1 to length-2 do
+                Z:={$IFDEF SUPEROBJECT}SO('[]'){$ELSE}JSONArray.Create{$ENDIF};
+                for idx:=1 to Len-2 do
                 begin
-                  Z2:=Remove(JEP_ParamHeader+IntToStr(i));
+                  Z2:={$IFDEF SUPEROBJECT}Delete{$ELSE}Remove{$ENDIF}(JEP_ParamHeader+IntToStr(idx));
                   if Z2<>nil then
-                    JSONArray(Z).put(Z2);
+                    {$IFDEF SUPEROBJECT}Z.AsArray.Add{$ELSE}JSONArray(Z).put{$ENDIF}(Z2);
                 end;
-                Put(JEP_Perfix,Z);
+                {$IFDEF SUPEROBJECT}PutO{$ELSE}Put{$ENDIF}(JEP_Perfix,Z);
               end;
-              mstr:=ValByIndex[Length-1];
-              Delete(length-1);
+              Len:={$IFDEF SUPEROBJECT}JSONParamCount(JP){$ELSE}Length{$ENDIF};
+              mstr:={$IFDEF SUPEROBJECT}S[JEP_ParamHeader+IntToStr(Len-1)]{$ELSE}ValByIndex[Len-1]{$ENDIF};
+            {$IFDEF SUPEROBJECT}
+              O[JEP_ParamHeader+IntToStr(Len-1)]:=nil;
+            {$ELSE}
+              Delete(Len-1);
+            {$ENDIF}
               //将操作符置于内层  如： var A:int;  const M=100;
+            {$IFDEF SUPEROBJECT}
+              Levels[JLevel].Obj:=NewFuncObj(Func);
+              Levels[JLevel].Obj.PutS(JEP_Param1,mstr);
+            {$ELSE}
               Levels[JLevel].Obj:=NewFuncObj(Func).Put(JEP_Param1,mstr);
-              Put(JEP_Param1,Levels[JLevel].Obj);
-              with Levels[n] do
+            {$ENDIF}
+              {$IFDEF SUPEROBJECT}PutO{$ELSE}Put{$ENDIF}(JEP_Param1,Levels[JLevel].Obj);
+              with Levels[nn] do
               begin
                 OpCh:=OpCh_Define;
                 Rank:=OpRank[' '];
@@ -3003,8 +3184,9 @@ var
                 end;
               exit;
             end;
-          JP.Put(JEP_Operator,Func);
-          with Levels[n] do
+          end;
+          JP.{$IFDEF SUPEROBJECT}PutS{$ELSE}Put{$ENDIF}(JEP_Operator,Func);
+          with Levels[nn] do
             if (AddMode=amOperator) or (AddMode=amBlockOp) then  //2011-09-01
             begin
               OpCh:=Func[1];
@@ -3018,7 +3200,7 @@ var
           Dec(JLevel);
           exit;
         end;
-        with Levels[n] do
+        with Levels[nn] do
         begin
           if (BC>=BlockCnt) and (OpCh<>'[') then  //当前双目操作符和前一个表达式位于相同的括号层次
           begin
@@ -3034,14 +3216,15 @@ var
         end;
         with JP do
         begin
-          mstr:=KeyByIndex[Length-1];  //最后一个Key
-          Z:=Remove(mstr);
+          Len:={$IFDEF SUPEROBJECT}JSONParamCount(JP){$ELSE}Length{$ENDIF};
+          mstr:={$IFDEF SUPEROBJECT}JEP_ParamHeader+IntToStr(Len-1){$ELSE}KeyByIndex[Len-1]{$ENDIF};  //最后一个Key
+          Z:={$IFDEF SUPEROBJECT}Delete{$ELSE}Remove{$ENDIF}(mstr);
         end;
         with Levels[JLevel] do
         begin
           Obj:=NewFuncObj(Func);
-          JSONObject(Obj).Put(JEP_Param1,Z);
-          JP.Put(mstr,Obj);
+          TJSONObj(Obj).{$IFDEF SUPEROBJECT}PutO{$ELSE}Put{$ENDIF}(JEP_Param1,Z);
+          JP.{$IFDEF SUPEROBJECT}PutO{$ELSE}Put{$ENDIF}(mstr,Obj);
           if Func='' then
           begin
             OpCh:=OpCh_None;
@@ -3059,38 +3242,44 @@ var
         end;
       end
       else begin
-        n:=JLevel-1;
-        if Levels[n].OpCh=OpCh_None then
+        nn:=JLevel-1;
+        if Levels[nn].OpCh=OpCh_None then
         begin
           if Func<>'' then
           begin
             //将修饰符转化为 perfix （数组）  2011-09-18
             //如 'public static function' -> {op:"",p1:"public",p2:"static",p3:"function"}
             //转化为: {op:" function",pf:["public","static"], ....... }
-            with JSONObject(Levels[n].Obj) do
+            with TJSONObj(Levels[nn].Obj) do
             begin
               //最后一个是类型指示符
-              if Length>1 then
+              Len:={$IFDEF SUPEROBJECT}JSONParamCount(Levels[nn].Obj){$ELSE}Length{$ENDIF};
+              if Len>1 then
               begin
-                mstr:=' '+ValByIndex[Length-1];
-                Put(JEP_Operator,mstr);
+                mstr:=' '+{$IFDEF SUPEROBJECT}S[JEP_ParamHeader+IntToStr(Len-1)]{$ELSE}ValByIndex[Len-1]{$ENDIF};
+                {$IFDEF SUPEROBJECT}PutS{$ELSE}Put{$ENDIF}(JEP_Operator,mstr);
+              {$IFDEF SUPEROBJECT}
+                O[JEP_ParamHeader+IntToStr(JSONParamCount(Levels[nn].Obj)-1)]:=nil;
+              {$ELSE}
                 Delete(length-1);
+              {$ENDIF}
               end;
-              if Length>1 then
+              Len:={$IFDEF SUPEROBJECT}JSONParamCount(Levels[nn].Obj){$ELSE}Length{$ENDIF};
+              if Len>1 then
               begin
-                Z:=JSONArray.Create;
-                for i:=1 to length-1 do
+                Z:={$IFDEF SUPEROBJECT}SO('[]'){$ELSE}JSONArray.Create{$ENDIF};
+                for idx:=1 to Len-1 do
                 begin
-                  Z2:=Remove(JEP_ParamHeader+IntToStr(i));
+                  Z2:={$IFDEF SUPEROBJECT}Delete{$ELSE}Remove{$ENDIF}(JEP_ParamHeader+IntToStr(idx));
                   if Z2<>nil then
-                    JSONArray(Z).put(Z2);
+                    {$IFDEF SUPEROBJECT}Z.AsArray.Add{$ELSE}JSONArray(Z).put{$ENDIF}(Z2);
                 end;
-                Put(JEP_Perfix,Z);
+                {$IFDEF SUPEROBJECT}PutO{$ELSE}Put{$ENDIF}(JEP_Perfix,Z);
               end;
               Levels[JLevel].Obj:=NewFuncObj(Func);
-              Put(JEP_Param1,Levels[JLevel].Obj);
+              {$IFDEF SUPEROBJECT}PutO{$ELSE}Put{$ENDIF}(JEP_Param1,Levels[JLevel].Obj);
             end;
-            with Levels[n] do
+            with Levels[nn] do
             begin
               OpCh:=OpCh_Define;
               Rank:=OpRank[' '];
@@ -3102,9 +3291,9 @@ var
             end;
             exit;
           end;
-          with Levels[n] do
+          with Levels[nn] do
           begin
-            JSONObject(Obj).Put(JEP_Operator,Func);
+            TJSONObj(Obj).{$IFDEF SUPEROBJECT}PutS{$ELSE}Put{$ENDIF}(JEP_Operator,Func);
             if Func='' then
             begin
               OpCh:=OpCh_None;
@@ -3133,15 +3322,14 @@ var
         JLevel:=ExprLevel;  //2011-09-01  A[1][2]
     end;
   CommonCase:
-    J:=JSONObject(Levels[JLevel].Obj);
+    J:=TJSONObj(Levels[JLevel].Obj);
     if AddMode=amFunc then
-      with J do
-        IsEmpty:=(Length<=1) and (Levels[JLevel].OpCh=OpCh_None) //(OptString(BIOS_Operator)='')
+      IsEmpty:=({$IFDEF SUPEROBJECT}JSONParamCount(J){$ELSE}J.Length{$ENDIF}<=1) and (Levels[JLevel].OpCh=OpCh_None) //(OptString(BIOS_Operator)='')
     else
       IsEmpty:=false;
     if ((AddMode=amOperator) or IsEmpty) and (Levels[JLevel].OpCh=OpCh_None) then
     begin
-      J.Put(JEP_Operator,Func);
+      J.{$IFDEF SUPEROBJECT}PutS{$ELSE}Put{$ENDIF}(JEP_Operator,Func);
       with Levels[JLevel] do
         if AddMode=amOperator then
         begin
@@ -3169,15 +3357,16 @@ var
         //当前Level的所有者
         if JLevel>0 then
         begin
-          JP:=JSONObject(Levels[JLevel-1].Obj);
-          n:=JP.Length;
+          JP:=TJSONObj(Levels[JLevel-1].Obj);
+          nn:={$IFDEF SUPEROBJECT}JSONParamCount(JP){$ELSE}JP.Length{$ENDIF};
           //在含有前缀的情况下，最后一个Key不是 P + (n-1)  2011-09-20
-          mstr:=JP.KeyByIndex[n-1];
-          JN.Put(JEP_Param1,JP.Remove(mstr));
-          JP.Put(mstr,JN);
+          {TODO: when SUPEROBJECT enabled... }
+          mstr:={$IFDEF SUPEROBJECT}JEP_ParamHeader+IntToStr(nn-1){$ELSE}JP.KeyByIndex[nn-1]{$ENDIF};
+          JN.{$IFDEF SUPEROBJECT}PutO{$ELSE}Put{$ENDIF}(JEP_Param1,JP.{$IFDEF SUPEROBJECT}Delete{$ELSE}Remove{$ENDIF}(mstr));
+          JP.{$IFDEF SUPEROBJECT}PutO{$ELSE}Put{$ENDIF}(mstr,JN);
         end
         else
-          JN.Put(JEP_Param1,J);
+          JN.{$IFDEF SUPEROBJECT}PutO{$ELSE}Put{$ENDIF}(JEP_Param1,J);
         with Levels[JLevel] do
         begin
           Obj:=JN;
@@ -3199,7 +3388,7 @@ var
         exit;
       end;
       with J do
-        Put(JEP_ParamHeader+IntToStr(Length),Levels[JLevel+1].Obj);
+        {$IFDEF SUPEROBJECT}PutO{$ELSE}Put{$ENDIF}(JEP_ParamHeader+IntToStr({$IFDEF SUPEROBJECT}JSONParamCount(J){$ELSE}Length{$ENDIF}),Levels[JLevel+1].Obj);
       Inc(JLevel);
       with Levels[JLevel] do
       begin
@@ -3223,25 +3412,25 @@ var
   end;
   procedure AddLineDiv;
   var
-    n,OriLv:Integer;
-    Z:TZAbstractObject;
-    J,JP,JN:JSONObject;
+    nn,OriLv:Integer;
+    Z:TJSONLeaf;
+    J,JP,JN:TJSONObj;
     mstr:String;
     label CommonCase;
   begin
     LastIsVar:=false;
     //最后一个Symbol是简单值或变量的情况 -- 应n当将其提升，嵌入到Func表达式内
-    if Levels[JLevel].Obj.ClassType<>JSONObject then
+    if Levels[JLevel].Obj.{$IFDEF SUPEROBJECT}DataType<>stObject{$ELSE}ClassType<>TJSONObj{$ENDIF} then
     begin
       //简单变量后跟双目操作符
-      n:=JLevel-1;
-      JP:=JSONObject(Levels[n].Obj); //表达式JSON对象
+      nn:=JLevel-1;
+      JP:=TJSONObj(Levels[nn].Obj); //表达式JSON对象
       //没有操作符的表达式 -- 填入Func
-      if Levels[n].OpCh=OpCh_None then
+      if Levels[nn].OpCh=OpCh_None then
       begin
         //处理 ... var A:... 的情况  2011-09-18
-        JP.Put(JEP_Operator,OpCh_Sentence);
-        with Levels[n] do
+        JP.{$IFDEF SUPEROBJECT}PutS{$ELSE}Put{$ENDIF}(JEP_Operator,OpCh_Sentence);
+        with Levels[nn] do
         begin
           OpCh:=OpCh_Sentence;
           Rank:=RK_Sentence;
@@ -3249,7 +3438,7 @@ var
         Dec(JLevel);
         exit;
       end;
-      with Levels[n] do
+      with Levels[nn] do
       begin
         if (BC>=BlockCnt) and (OpCh<>'[') then  //当前双目操作符和前一个表达式位于相同的括号层次
         begin
@@ -3262,14 +3451,14 @@ var
       end;
       with JP do
       begin
-        mstr:=KeyByIndex[Length-1];  //最后一个Key
-        Z:=Remove(mstr);
+        mstr:={$IFDEF SUPEROBJECT}JEP_ParamHeader+IntToStr(JSONParamCount(JP)-1){$ELSE}KeyByIndex[Length-1]{$ENDIF};  //最后一个Key
+        Z:={$IFDEF SUPEROBJECT}Delete{$ELSE}Remove{$ENDIF}(mstr);
       end;
       with Levels[JLevel] do
       begin
         Obj:=NewFuncObj(OpCh_Sentence);
-        JSONObject(Obj).Put(JEP_Param1,Z);
-        JP.Put(mstr,Obj);
+        TJSONObj(Obj).{$IFDEF SUPEROBJECT}PutO{$ELSE}Put{$ENDIF}(JEP_Param1,Z);
+        JP.{$IFDEF SUPEROBJECT}PutO{$ELSE}Put{$ENDIF}(mstr,Obj);
         OpCh:=OpCh_Sentence; //AddMode;
         Rank:=RK_Sentence;
       end;
@@ -3283,10 +3472,10 @@ var
         //分隔符前无语句 if( a, ; b ....
         JN:=NewFuncObj(OpCh_Sentence);
         JLevel:=OriLv;
-        with JSONObject(Levels[JLevel].Obj) do
+        with TJSONObj(Levels[JLevel].Obj) do
         begin
-          n:=Length;
-          Put(JEP_ParamHeader+IntToStr(n),JN);
+          nn:={$IFDEF SUPEROBJECT}JSONParamCount(Levels[JLevel].Obj){$ELSE}Length{$ENDIF};
+          {$IFDEF SUPEROBJECT}PutO{$ELSE}Put{$ENDIF}(JEP_ParamHeader+IntToStr(nn),JN);
         end;
         Inc(JLevel);
         with Levels[JLevel] do
@@ -3300,10 +3489,10 @@ var
       end;
     end;
   CommonCase:
-    J:=JSONObject(Levels[JLevel].Obj);
+    J:=TJSONObj(Levels[JLevel].Obj);
     if (Levels[JLevel].OpCh=OpCh_None) then
     begin
-      J.Put(JEP_Operator,OpCh_Sentence);
+      J.{$IFDEF SUPEROBJECT}PutS{$ELSE}Put{$ENDIF}(JEP_Operator,OpCh_Sentence);
       with Levels[JLevel] do
       begin
         OpCh:=OpCh_Sentence;
@@ -3321,15 +3510,16 @@ var
       //当前Level的所有者
       if JLevel>0 then
       begin
-        JP:=JSONObject(Levels[JLevel-1].Obj);
-        n:=JP.Length;
+        JP:=TJSONObj(Levels[JLevel-1].Obj);
+        nn:={$IFDEF SUPEROBJECT}JSONParamCount(JP){$ELSE}JP.Length{$ENDIF};
         //在含有前缀的情况下，最后一个Key不是 P + (n-1)  2011-09-20
-        mstr:=JP.KeyByIndex[n-1];
-        JN.Put(JEP_Param1,JP.Remove(mstr));
-        JP.Put(mstr,JN);
+        {TODO: when SUPEROBJECT enabled... }
+        mstr:={$IFDEF SUPEROBJECT}JEP_ParamHeader+IntToStr(nn-1){$ELSE}JP.KeyByIndex[nn-1]{$ENDIF};
+        JN.{$IFDEF SUPEROBJECT}PutO{$ELSE}Put{$ENDIF}(JEP_Param1,JP.{$IFDEF SUPEROBJECT}Delete{$ELSE}Remove{$ENDIF}(mstr));
+        JP.{$IFDEF SUPEROBJECT}PutO{$ELSE}Put{$ENDIF}(mstr,JN);
       end
       else
-        JN.Put(JEP_Param1,J);
+        JN.{$IFDEF SUPEROBJECT}PutO{$ELSE}Put{$ENDIF}(JEP_Param1,J);
       with Levels[JLevel] do
       begin
         Obj:=JN;
@@ -3338,38 +3528,39 @@ var
       end;
     end;
   end;
-  procedure WriteStr(const S: String);
+  procedure WriteStr(const AStr: String);
   var
-    e,n:Integer;
+    e,nn:Integer;
     mstr:String;
-    J:TZAbstractObject;
+    J:TJSONLeaf;
   begin
     //将两个前后连续定义、且没有其它操作符夹杂的的字符串合并为一个 eg:   'ABC' 'abc'  => 'ABCabc'
     //可以实现用字符串加长变量名的效果  eg:  X2' Old'  will be var name "X2 Old"
     J:=Levels[JLevel].Obj;
-    if (J.ClassType=_String) then
+    if (J.{$IFDEF SUPEROBJECT}DataType=stString{$ELSE}ClassType=_String{$ENDIF}) then
     begin
-      mstr:=_String(J).toString;
+      mstr:={$IFDEF SUPEROBJECT}J.AsString{$ELSE}_String(J).toString{$ENDIF};
       if mstr<>'' then
       begin
         if mstr[1]=JEP_StrParamHeader then // ... 'ABC' 'abcd' ...
-          _String(J).AsString:=mstr+S
+          {$IFDEF SUPEROBJECT}{TODO: AsString:=...}{$ELSE}_String(J).AsString:=mstr+AStr{$ENDIF}
         else begin // ... XXXXX 'abc' ...
           AddOp(' ',amOperator,true);
-          WriteStr(S);
+          WriteStr(AStr);
         end;
       end;
       exit;
     end;
     e:=ExprLevel;
-    with JSONObject(Levels[e].Obj) do
+    with TJSONObj(Levels[e].Obj) do
     begin
-      n:=Length;
-      Put(JEP_ParamHeader+IntToStr(n),JEP_StrParamHeader+S);
+      nn:={$IFDEF SUPEROBJECT}JSONParamCount(Levels[e].Obj){$ELSE}Length{$ENDIF};
+      mstr:=JEP_ParamHeader+IntToStr(nn);
+      {$IFDEF SUPEROBJECT}PutS{$ELSE}Put{$ENDIF}(mstr,JEP_StrParamHeader+AStr);
       JLevel:=e+1;
       with Levels[JLevel] do
       begin
-        Obj:=ValObjByIndex[n];
+        Obj:={$IFDEF SUPEROBJECT}O[mstr]{$ELSE}ValObjByIndex[nn]{$ENDIF};
         BC:=BlockCnt;
         OpCh:=OpCh_None;
       end;
@@ -3389,18 +3580,18 @@ var
   end;
   function WriteVar(VarName: String):Boolean;
   var
-    e,n:Integer;
+    e,nn:Integer;
     v:Variant;
     mstr:String;
   begin
     e:=ExprLevel;
-    with JSONObject(Levels[e].Obj) do
+    with TJSONObj(Levels[e].Obj) do
     begin
-      n:=Length;
-      if n>1 then
+      nn:={$IFDEF SUPEROBJECT}JSONParamCount(Levels[e].Obj){$ELSE}Length{$ENDIF};
+      if nn>1 then
       begin
-        mstr:=OptString(JEP_Operator);
-        if (mstr='') or (mstr=' ') or ((n>2) and (mstr=';') and LastIsVar) then  //已经有了一个参数，但还缺少操作符
+        mstr:={$IFDEF SUPEROBJECT}GetS{$ELSE}OptString{$ENDIF}(JEP_Operator);
+        if (mstr='') or (mstr=' ') or ((nn>2) and (mstr=';') and LastIsVar) then  //已经有了一个参数，但还缺少操作符
         begin
           Result:=false;
           exit;
@@ -3428,11 +3619,12 @@ var
           exit;
         end;
       end;
-      Put(JEP_ParamHeader+IntToStr(n),VarName);
+      mstr:=JEP_ParamHeader+IntToStr(nn);
+      {$IFDEF SUPEROBJECT}PutS{$ELSE}Put{$ENDIF}(mstr,VarName);
       JLevel:=e+1;
       with Levels[JLevel] do
       begin
-        Obj:=ValObjByIndex[n];
+        Obj:={$IFDEF SUPEROBJECT}O[mstr]{$ELSE}ValObjByIndex[nn]{$ENDIF};
         BC:=BlockCnt;
         OpCh:=OpCh_None;
         Rank:=0;
@@ -3518,7 +3710,7 @@ begin
     SubString:=Copy(Expr,s,MaxInt);
   if SubString='' then
   begin
-    Result:=JSONObject.Create;
+    Result:={$IFDEF SUPEROBJECT}SO('{}'){$ELSE}TJSONObj.Create{$ENDIF};
     if POutExprLen<>nil then
       POutExprLen^:=0;
     exit;
@@ -3701,7 +3893,7 @@ begin
           begin
             with Levels[JLevel] do
             begin
-              JSONObject(Obj).Put(JEP_Operator,'(');
+              TJSONObj(Obj).{$IFDEF SUPEROBJECT}PutS{$ELSE}Put{$ENDIF}(JEP_Operator,'(');
               OpCh:='(';
               Rank:=OpRank['('];
               Dec(BC);
@@ -3718,12 +3910,12 @@ begin
             // -- 将括号内的内容做为集合处理
             JLevel:=OriLv;
             JLevel:=ExprLevel;
-            with JSONObject(Levels[JLevel].Obj) do
+            with TJSONObj(Levels[JLevel].Obj) do
             begin
-              StrValue:=OptString(JEP_Operator);
+              StrValue:={$IFDEF SUPEROBJECT}GetS{$ELSE}OptString{$ENDIF}(JEP_Operator);
               if StrValue='' then
               begin
-                Put(JEP_Operator,'(');  //括号做为集合标志
+                {$IFDEF SUPEROBJECT}PutS{$ELSE}Put{$ENDIF}(JEP_Operator,'(');  //括号做为集合标志
               end
               else
                 JLevel:=FuncLevel;
@@ -3873,7 +4065,7 @@ begin
           end;
           WriteStr(StrValue);
         end;
-        '{':  //Embed JSONObject
+        '{':  //Embed TJSONObj
         begin
           while i<=EndPos do
           begin
@@ -3892,21 +4084,21 @@ begin
       end;
     end;
   end;
-  Result:=JSONObject(Levels[0].Obj);
+  Result:=TJSONObj(Levels[0].Obj);
   if POutExprLen<>nil then
     POutExprLen^:=i;
 end;
 
 function TJSONExprParser.ExprToJSONStr(const Expr: String): String;
 var
-  J:JSONObject;
+  J:TJSONObj;
 begin
   J:=ExprToJSON(Expr);
   if J=nil then
     Result:=''
   else begin
-    Result:=J.ToString;
-    J.Free;
+    Result:=J.{$IFDEF SUPEROBJECT}AsString{$ELSE}toString{$ENDIF};
+    {$IFNDEF SUPEROBJECT}J.Free{$ENDIF};
   end;
 end;
 
@@ -3915,12 +4107,12 @@ begin
   Result:=LastExprType;
 end;
 
-function TJSONExprParser.JSONToExpr(AObj: JSONObject; ParentOpRank: Integer): String;
+function TJSONExprParser.JSONToExpr(AObj: TJSONObj; ParentOpRank: Integer): String;
 var
   Func:String;
   IsCommonFunc:Boolean;
   OpRk:Integer;
-  function J2Str(Z: TZAbstractObject):String;
+  function J2Str(Z: TJSONLeaf):String;
   var
     v:Variant;
   begin
@@ -3929,21 +4121,21 @@ var
       Result:='';
       exit;
     end;
-    if Z.ClassType=JSONObject then
+    if Z.{$IFDEF SUPEROBJECT}DataType=stObject{$ELSE}ClassType=TJSONObj{$ENDIF} then
     begin
       if IsCommonFunc then  //只有一个参数的普通函数自带括号了
       begin
         if ParentOpRank<0 then
-          Result:=JSONToExpr(JSONObject(Z),ParentOpRank)
+          Result:=JSONToExpr(TJSONObj(Z),ParentOpRank)
         else
-          Result:=JSONToExpr(JSONObject(Z),0)
+          Result:=JSONToExpr(TJSONObj(Z),0)
       end
       else
-        Result:=JSONToExpr(JSONObject(Z),OpRk);
+        Result:=JSONToExpr(TJSONObj(Z),OpRk);
     end
     else begin
-      Result:=Z.toString;
-      if (Result<>'') and (Z.ClassType=_String) then
+      Result:=Z.{$IFDEF SUPEROBJECT}AsString{$ELSE}toString{$ENDIF};
+      if (Result<>'') and (Z.{$IFDEF SUPEROBJECT}DataType=stString{$ELSE}ClassType=_String{$ENDIF}) then
       begin
         if Result[1]=JEP_StrParamHeader then  //String
           Result:=QuotedStr(Copy(Result,2,MaxInt))
@@ -3973,14 +4165,14 @@ var
     end;
   end;
 var
-  i:Integer;
+  idx:Integer;
   C1:Char;
   BodyStr:String;
-  Z:TZAbstractObject;
+  Z:TJSONLeaf;
 begin
   Result:='';
   if AObj=nil then exit;
-  Func:=AObj.OptString(JEP_Operator);
+  Func:=AObj.{$IFDEF SUPEROBJECT}GetS{$ELSE}OptString{$ENDIF}(JEP_Operator);
 {$IFNDEF NO_OPTRANSLATE}
   if OpHelper<>nil then  //2011-09-04
     Func:=OpHelper.RestoreOperator(Func,AObj);
@@ -4001,35 +4193,33 @@ begin
     begin
       with AObj do
       begin
-        Result:=J2Str(Opt(JEP_Param1));
-        for i:=2 to Length-1 do
-          Result:=Result+' '+J2Str(Opt(JEP_ParamHeader+IntToStr(i)));
+        Result:=J2Str({$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_Param1));
+        for idx:=2 to {$IFDEF SUPEROBJECT}JSONParamCount(AObj){$ELSE}Length{$ENDIF}-1 do
+          Result:=Result+' '+J2Str({$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_ParamHeader+IntToStr(idx)));
       end;
       exit;
     end;
-    Z:=AObj.Opt(JEP_Perfix);
-    if Z is JSONArray then
+    Z:=AObj.{$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_Perfix);
+    if {$IFDEF SUPEROBJECT}Z.AsArray<>nil{$ELSE}Z is JSONArray{$ENDIF} then
     begin
-      with JSONArray(Z) do
+      with {$IFDEF SUPEROBJECT}Z.AsArray{$ELSE}JSONArray(Z){$ENDIF} do
       begin
-        for i:=0 to Pred(length) do
-          Result:=Result+getString(i)+' ';
+        for idx:=0 to Pred(length) do
+          Result:=Result+{$IFDEF SUPEROBJECT}S[idx]{$ELSE}getString(idx){$ENDIF}+' ';
       end;
     end;
     Result:=Result+Copy(Func,2,MaxInt)+' ';  //去掉空格
     with AObj do
-      Z:=ValObjByIndex[length-1];
-    if not (Z is JSONArray) then
-    begin
+      Z:={$IFDEF SUPEROBJECT}GetO(JEP_ParamHeader+IntToStr(JSONParamCount(AObj)-1)){$ELSE}ValObjByIndex[length-1]{$ENDIF};
+    if {$IFDEF SUPEROBJECT}Z.DataType<>stArray{$ELSE}not (Z is JSONArray){$ENDIF} then
       Result:=Result+J2Str(Z);
-    end;
     exit;
   end;
-  Z:=AObj.Opt(JEP_Param1);
+  Z:=AObj.{$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_Param1);
   Result:=J2Str(Z);
   if Func='' then
   begin
-    if (Z is JSONObject) then  //处理括号
+    if {$IFDEF SUPEROBJECT}Z.DataType=stObject{$ELSE}(Z is TJSONObj){$ENDIF} then  //处理括号
       Result:='('+Result+')';
     exit;
   end;
@@ -4048,7 +4238,7 @@ begin
     end
     else
       Result:=Result+' '+Func+' ';
-    Z:=AObj.Opt(JEP_Param2);
+    Z:=AObj.{$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_Param2);
     if OpRk>=0 then
     begin
       //当第二个语句与父节点优先级相同时，应当使用括号 -- 主动提高父节点优先级
@@ -4062,7 +4252,8 @@ begin
     begin
       if Z=nil then
         Result:=Result+'()'
-      else if (Z is JSONObject) and (JSONObject(Z).OptString(JEP_Operator)=';') then
+      else if ({$IFDEF SUPEROBJECT}Z.DataType=stObject{$ELSE}Z is TJSONObj{$ENDIF})
+        and (TJSONObj(Z).{$IFDEF SUPEROBJECT}GetS{$ELSE}OptString{$ENDIF}(JEP_Operator)=';') then
       begin
         Result:=Result+'('+BodyStr+')'
       end
@@ -4073,8 +4264,8 @@ begin
     Result:=Result+BodyStr;
     if C1=OpCh_Sentence then  //支持多个平行语句  2010-06-28
       with AObj do
-        for i:=3 to Length-1 do
-          Result:=Result+Func+J2Str(Opt(JEP_ParamHeader+IntToStr(i)));
+        for idx:=3 to {$IFDEF SUPEROBJECT}JSONParamCount(AObj){$ELSE}Length{$ENDIF}-1 do
+          Result:=Result+Func+J2Str({$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_ParamHeader+IntToStr(idx)));
     if (ParentOpRank<0) or (OpRk<ParentOpRank) then
       Result:='('+Result+')';
   end
@@ -4086,18 +4277,18 @@ begin
       else
         Result:='[';
       with AObj do
-        for i:=2 to Pred(Length) do
+        for idx:=2 to Pred({$IFDEF SUPEROBJECT}JSONParamCount(AObj){$ELSE}Length{$ENDIF}) do
         begin
-          if i>2 then Result:=Result+',';
-          Result:=Result+J2Str(Opt(JEP_ParamHeader+IntToStr(i)));
+          if idx>2 then Result:=Result+',';
+          Result:=Result+J2Str({$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_ParamHeader+IntToStr(idx)));
         end;
       Result:=Result+']';
       exit;
     end
     else begin
       with AObj do
-        for i:=2 to Pred(Length) do
-          Result:=Result+','+J2Str(Opt(JEP_ParamHeader+IntToStr(i)));
+        for idx:=2 to Pred({$IFDEF SUPEROBJECT}JSONParamCount(AObj){$ELSE}Length{$ENDIF}) do
+          Result:=Result+','+J2Str({$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_ParamHeader+IntToStr(idx)));
     end;
     Result:='('+Result+')';
     if Func<>'(' then  //集合以 "(" 做为操作符
@@ -4105,11 +4296,11 @@ begin
   end;
 end;
 
-function TJSONExprParser.OptimizeJSON(AObj: JSONObject): JSONObject;
+function TJSONExprParser.OptimizeJSON(AObj: TJSONObj): TJSONObj;
 var
   SL:TStrings;
-  c,i:Integer;
-  Z:TZAbstractObject;
+  c,idx:Integer;
+  Z:TJSONLeaf;
 begin
   Result:=nil;
   if AObj=nil then exit;
@@ -4117,16 +4308,17 @@ begin
   c:=VarNeeded(AObj,SL);
   if c>0 then
   begin
-    Result:=JSONObject.Create;
+    Result:={$IFDEF SUPEROBJECT}SO('{}'){$ELSE}TJSONObj.Create{$ENDIF};
     with AObj do
     begin
-      Result.Put(KeyByIndex[0],ValObjByIndex[0].Clone);
-      for i:=1 to Pred(Length) do
+      Result.{$IFDEF SUPEROBJECT}PutO(JEP_Operator,O[JEP_Operator].Clone){$ELSE}Put(KeyByIndex[0],ValObjByIndex[0].Clone){$ENDIF};
+      for idx:=1 to Pred({$IFDEF SUPEROBJECT}JSONParamCount(AObj){$ELSE}Length{$ENDIF}) do
       begin
-        Z:=AObj.ValObjByIndex[i];
-        if Z.ClassType<>JSONObject then
+        Z:=AObj.{$IFDEF SUPEROBJECT}GetO(JEP_ParamHeader+IntToStr(idx)){$ELSE}ValObjByIndex[idx]{$ENDIF};
+        if Z.{$IFDEF SUPEROBJECT}DataType<>stObject{$ELSE}ClassType<>TJSONObj{$ENDIF} then
         begin
-          Result.Put(KeyByIndex[i],Z.Clone);
+          Result.{$IFDEF SUPEROBJECT}PutO{$ELSE}Put{$ENDIF}(
+            {$IFDEF SUPEROBJECT}JEP_ParamHeader+IntToStr(idx){$ELSE}KeyByIndex[idx]{$ENDIF},Z.Clone);
           continue;
         end;
       end;
@@ -4247,15 +4439,15 @@ begin
   end;
 end;
 
-class function TJSONExprParser.VarNeeded(AObj: JSONObject; var Vars: TStrings):Integer;
-  procedure Check(Z: TZAbstractObject);
+class function TJSONExprParser.VarNeeded(AObj: TJSONObj; var Vars: TStrings):Integer;
+  procedure Check(Z: TJSONLeaf);
   var
     mstr:String;
   begin
     if Z=nil then exit;
-    if Z.ClassType=_String then
+    if Z.{$IFDEF SUPEROBJECT}DataType=stString{$ELSE}ClassType=_String{$ENDIF} then
     begin
-      mstr:=_String(Z).toString;
+      mstr:={$IFDEF SUPEROBJECT}Z.AsString{$ELSE}_String(Z).toString{$ENDIF};
       if (mstr<>'') and (mstr[1]<>JEP_StrParamHeader) then  //变量名
       begin
         Inc(Result);
@@ -4264,9 +4456,9 @@ class function TJSONExprParser.VarNeeded(AObj: JSONObject; var Vars: TStrings):I
         Vars.Add(mstr);
       end;
     end
-    else if Z.ClassType=JSONObject then
+    else if Z.{$IFDEF SUPEROBJECT}DataType=stObject{$ELSE}ClassType=TJSONObj{$ENDIF} then
     begin
-      Inc(Result,VarNeeded(JSONObject(Z),Vars));
+      Inc(Result,VarNeeded(TJSONObj(Z),Vars));
     end;
   end;
 var
@@ -4275,22 +4467,22 @@ begin
   Result:=0;
   if AObj=nil then exit;
   //忽略为首的操作符，检查每个参数成员
-  for i:=1 to Pred(AObj.Length) do
-    Check(AObj.ValObjByIndex[i]);
+  for i:=1 to Pred({$IFDEF SUPEROBJECT}JSONParamCount(AObj){$ELSE}AObj.Length{$ENDIF}) do
+    Check(AObj.{$IFDEF SUPEROBJECT}GetO(JEP_ParamHeader+IntToStr(i)){$ELSE}ValObjByIndex[i]{$ENDIF});
 end;
 
 class function TJSONExprParser.VarToExprStr(V: Variant): String;
 begin
   if VarIsNull(V) then
-    Result:=CNULL.toString
+    Result:=CNULL.{$IFDEF SUPEROBJECT}AsString{$ELSE}toString{$ENDIF}
   else if VarType(V)=varString then
     Result:=QuotedStr(String(V))
   else if VarType(V)=varBoolean then
   begin
     if Boolean(V) then
-      Result:=_Boolean._TRUE.toString
+      Result:={$IFDEF SUPEROBJECT}'true'{$ELSE}_Boolean._TRUE.toString{$ENDIF}
     else
-      Result:=_Boolean._FALSE.toString;
+      Result:={$IFDEF SUPEROBJECT}'false'{$ELSE}_Boolean._FALSE.toString{$ENDIF};
   end
   else
     Result:=VarToStr(V);
@@ -4328,12 +4520,12 @@ end;
 
 function TJEVarHelper.GetAsJSONString: String;
 var
-  J:JSONObject;
+  J:TJSONObj;
 begin
-  J:=JSONObject.Create;
+  J:={$IFDEF SUPEROBJECT}SO('{}'){$ELSE}TJSONObj.Create{$ENDIF};
   ValExport(J);
-  Result:=J.toString;
-  J.Free;
+  Result:=J.{$IFDEF SUPEROBJECT}AsString{$ELSE}toString{$ENDIF};
+  {$IFNDEF SUPEROBJECT}J.Free{$ENDIF};
 end;
 
 function TJEVarHelper.GetObjAttr(AObj: TObject; const Attr: String): Variant;
@@ -4360,15 +4552,15 @@ begin
 end;
 
 {$IFNDEF NO_RECMEMBER}
-function TJSONVarHelper.GetVar2(AObj: JSONObject; out Val:Variant):Boolean;
+function TJSONVarHelper.GetVar2(AObj: TJSONObj; out Val:Variant):Boolean;
 var
   str1,str2:String;
 begin
   if AObj=nil then
     str1:=''
   else begin
-    str1:=AObj.OptString(BIOS_Param1);
-    str2:=AObj.OptString(BIOS_Param2);
+    str1:=AObj.{$IFDEF SUPEROBJECT}GetS{$ELSE}OptString{$ENDIF}(BIOS_Param1);
+    str2:=AObj.{$IFDEF SUPEROBJECT}GetS{$ELSE}OptString{$ENDIF}(BIOS_Param2);
     if str2<>'' then
       str1:=str1+'.'+str2;
   end;
@@ -4393,7 +4585,7 @@ begin
   Result:='';
 end;
 
-function TJEVarHelper.GetVarObj(const VarName: String; out Obj: JSONObject): Boolean;
+function TJEVarHelper.GetVarObj(const VarName: String; out Obj: TJSONObj): Boolean;
 begin
   Result:=false;
 end;
@@ -4407,16 +4599,16 @@ end;
 
 procedure TJEVarHelper.SetAsJSONString(const Value: String);
 var
-  J:JSONObject;
+  J:TJSONObj;
 begin
   try
-    J:=JSONObject.Create(Value);
+    J:={$IFDEF SUPEROBJECT}SO(Value){$ELSE}TJSONObj.Create(Value){$ENDIF};
   except
     exit;
   end;
   Clean;
   ValImport(J);
-  J.Free;
+  {$IFNDEF SUPEROBJECT}J.Free{$ENDIF};
 end;
 
 procedure TJEVarHelper.SetNextHelper(const Value: TJEVarHelper);
@@ -4429,7 +4621,7 @@ begin
   Result:=false;
 end;
 
-function TJEVarHelper.SetObjectVar(const VarName: String; JObj: JSONObject): Boolean;
+function TJEVarHelper.SetObjectVar(const VarName: String; JObj: TJSONObj): Boolean;
 begin
   Result:=false;
 end;
@@ -4456,7 +4648,7 @@ begin
 end;
 
 {$IFNDEF NO_RECMEMBER}
-function TJSONVarHelper.SetVar2(AObj: JSONObject;
+function TJSONVarHelper.SetVar2(AObj: TJSONObj;
   const Val: Variant): Boolean;
 var
   str1,str2:String;
@@ -4464,8 +4656,8 @@ begin
   if AObj=nil then
     str1:=''
   else begin
-    str1:=AObj.OptString(BIOS_Param1);
-    str2:=AObj.OptString(BIOS_Param2);
+    str1:=AObj.{$IFDEF SUPEROBJECT}GetS{$ELSE}OptString{$ENDIF}(BIOS_Param1);
+    str2:=AObj.{$IFDEF SUPEROBJECT}GetS{$ELSE}OptString{$ENDIF}(BIOS_Param2);
     if str2<>'' then
       str1:=str1+'.'+str2;
   end;
@@ -4473,12 +4665,12 @@ begin
 end;
 {$ENDIF}
 
-function TJEVarHelper.ValExport(PlainObj: JSONObject): Integer;
+function TJEVarHelper.ValExport(PlainObj: TJSONObj): Integer;
 var
   i:Integer;
   mstr:String;
   v:Variant;
-  Obj:JSONObject;
+  Obj:TJSONObj;
 begin
   if PlainObj=nil then
   begin
@@ -4501,32 +4693,44 @@ begin
   end;
 end;
 
-function TJEVarHelper.ValImport(PlainObj: JSONObject): Integer;
+function TJEVarHelper.ValImport(PlainObj: TJSONObj): Integer;
 var
-  i:Integer;
+  idx:Integer;
   mstr:String;
   v:Variant;
-  Z:TZAbstractObject;
-  JObj:JSONObject;
+  Z:TJSONLeaf;
+  JObj:TJSONObj;
 begin
   Result:=0;
   if PlainObj=nil then exit;
-  with PlainObj do
-    for i:=0 to Pred(Length) do
+  with PlainObj{$IFDEF SUPEROBJECT}.GetEnumerator{$ENDIF} do
+  begin
+  {$IFDEF SUPEROBJECT}
+    while true do
     begin
-      Z:=ValObjByIndex[i];
-      mstr:=KeyByIndex[i];
+      Z:=Current;
+      {TODO: mstr=?}
+  {$ELSE}
+    for idx:=0 to Pred(Length) do
+    begin
+      Z:=ValObjByIndex[idx];
+      mstr:=KeyByIndex[idx];
       if mstr='' then continue;
-      if Z.ClassType=JSONObject then
+  {$ENDIF}
+      if Z.{$IFDEF SUPEROBJECT}DataType=stObject{$ELSE}ClassType=TJSONObj{$ENDIF} then
       begin
-        JObj:=JSONObject(Z.Clone);
+        JObj:=TJSONObj(Z.Clone);
         SetObjectVar(mstr,JObj);
         continue;
       end;
       v:=VarFromJSON(Z);
       if SetVar(mstr,v) then
         Inc(Result);
+    {$IFDEF SUPEROBJECT}
+      if not MoveNext then exit;
+    {$ENDIF}
     end;
+  end;
 end;
 
 function TJEVarHelper.VarIsObj(const VarName: String): Boolean;
@@ -4542,7 +4746,7 @@ begin
   Result:=false;
 end;
 
-function TJEFuncHelper.GetValue2(Sender: TJSONExprParser; FuncObj: JSONObject;
+function TJEFuncHelper.GetValue2(Sender: TJSONExprParser; FuncObj: TJSONObj;
   var Params: array of Variant; out Val: Variant; out OutParamIdx: TParamSet): Boolean;
 begin
   Result:=false;
@@ -4560,25 +4764,25 @@ begin
 {$IFDEF NO_COMPLEXOBJ}
   FValueHolder.Clean;
 {$ELSE}
-  FRootHolder.Clean;
+  FRootHolder.{$IFDEF SUPEROBJECT}Clear(true){$ELSE}Clean{$ENDIF};
 {$ENDIF}
 end;
 
 {$IFNDEF NO_COMPLEXOBJ}
-function TSimpleVarHelper.ComplexValObjByName(const VarName: String): TZAbstractObject;
+function TSimpleVarHelper.ComplexValObjByName(const VarName: String): TJSONLeaf;
 var
   i:Integer;
 begin
   with FValObjStatck do
     for i:=Pred(Count) downto 0 do
     begin
-      Result:=JSONObject(Objects[i]).Opt(VarName);
+      Result:={$IFDEF SUPEROBJECT}TJSONObj(FValItfs[i]).GetO{$ELSE}TJSONObj(Objects[i]).Opt{$ENDIF}(VarName);
       if Result<>nil then exit;
     end;
 end;
 
 function TSimpleVarHelper.ComplexValObjByNameEx(const VarName: String;
-  out AValHolder: JSONObject): TZAbstractObject;
+  out AValHolder: TJSONObj): TJSONLeaf;
 var
   i:Integer;
 begin
@@ -4586,22 +4790,27 @@ begin
   begin
     for i:=Pred(Count) downto 0 do
     begin
-      AValHolder:=JSONObject(Objects[i]);
-      Result:=AValHolder.Opt(VarName);
+      AValHolder:=TJSONObj({$IFDEF SUPEROBJECT}FValItfs{$ELSE}Objects{$ENDIF}[i]);
+      Result:=AValHolder.{$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(VarName);
       if Result<>nil then exit;
     end;
-    AValHolder:=JSONObject(Objects[Count-1]);  //默认为最近的ValObj
+    AValHolder:=TJSONObj({$IFDEF SUPEROBJECT}FValItfs{$ELSE}Objects{$ENDIF}[Count-1]);  //默认为最近的ValObj
   end;
 end;
 {$ENDIF}
 
 constructor TSimpleVarHelper.Create;
 begin
-  FValueHolder:=JSONObject.Create;
+  FValueHolder:={$IFDEF SUPEROBJECT}SO{$ELSE}TJSONObj.Create{$ENDIF};
 {$IFNDEF NO_COMPLEXOBJ}
   FRootHolder:=FValueHolder;
-  FValObjStatck:=TStringList.Create;
-  FValObjStatck.AddObject('',FValueHolder);
+  FValObjStatck:=TStringList.Create; {$IFDEF SUPEROBJECT}FValItfs:=TInterfaceList.Create;{$ENDIF}
+  {$IFDEF SUPEROBJECT}
+  FValObjStatck.Add('');
+  FValItfs.Add(FValueHolder);
+  {$ELSE}
+  FValObjStatck.AddObject('',TObject(FValueHolder));
+  {$ENDIF}
 {$ENDIF}
 end;
 
@@ -4610,7 +4819,8 @@ begin
 {$IFDEF NO_COMPLEXOBJ}
   FValueHolder.Free;
 {$ELSE}
-  FRootHolder.Free;
+  {$IFDEF SUPEROBJECT}FRootHolder:=nil{$ELSE}FRootHolder.Free{$ENDIF};
+  {$IFDEF SUPEROBJECT}FValItfs.Free;{$ENDIF}
   FValObjStatck.Free;
 {$ENDIF}
   inherited;
@@ -4619,31 +4829,35 @@ end;
 {$IFNDEF NO_COMPLEXOBJ}
 function TSimpleVarHelper.EnterObj(const ObjName: String): Boolean;
 var
-  Holder:JSONObject;
-  Z:TZAbstractObject;
+  Holder:TJSONObj;
+  Z:TJSONLeaf;
 begin
   Z:=ComplexValObjByNameEx(ObjName,Holder);
   if Z<>nil then
   begin
-    if not (Z is JSONObject) then
+    if {$IFDEF SUPEROBJECT}Z.DataType<>stObject{$ELSE}not (Z is TJSONObj){$ENDIF} then
     begin
       Result:=false;
       exit;
     end;
-    FValueHolder:=JSONObject(Z);
+    FValueHolder:=TJSONObj(Z);
   end
   else begin
-    FValueHolder:=JSONObject.Create;
-    Holder.Put(ObjName,FValueHolder);
+    FValueHolder:={$IFDEF SUPEROBJECT}SO{$ELSE}TJSONObj.Create{$ENDIF};
+    Holder.{$IFDEF SUPEROBJECT}PutO{$ELSE}Put{$ENDIF}(ObjName,FValueHolder);
   end;
+{$IFDEF SUPEROBJECT}
+  FValObjStatck.Add(ObjName);FValItfs.Add(FValueHolder);
+{$ELSE}
   FValObjStatck.AddObject(ObjName,FValueHolder);
+{$ENDIF}
   Result:=true;
 end;
 {$ENDIF}
 
 procedure TSimpleVarHelper.Delete(const VarName: String);
 begin
-  FValueHolder.Remove(VarName).Free;
+  FValueHolder.{$IFDEF SUPEROBJECT}Delete{$ELSE}Remove{$ENDIF}(VarName){$IFNDEF SUPEROBJECT}.Free{$ENDIF};
 end;
 
 function TSimpleVarHelper.GetTraceOnSet: Boolean;
@@ -4654,10 +4868,10 @@ end;
 function TSimpleVarHelper.GetVar(const VarName: String;
   out Val: Variant): Boolean;
 var
-  Z:TZAbstractObject;
+  Z:TJSONLeaf;
 begin
 {$IFDEF NO_COMPLEXOBJ}
-  Z:=FValueHolder.Opt(VarName);
+  Z:=FValueHolder.{$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(VarName);
 {$ELSE}
   Z:=ComplexValObjByName(VarName);
 {$ENDIF}
@@ -4675,7 +4889,7 @@ begin
 {$IFDEF NO_COMPLEXOBJ}
   Result:=FValueHolder.Length;
 {$ELSE}
-  Result:=FRootHolder.Length;
+  Result:={$IFDEF SUPEROBJECT}JSONParamCount(FRootHolder){$ELSE}FRootHolder.Length{$ENDIF};
 {$ENDIF}
 end;
 
@@ -4684,16 +4898,20 @@ begin
 {$IFDEF NO_COMPLEXOBJ}
   Result:=FValueHolder.KeyByIndex[Idx];
 {$ELSE}
+  {$IFDEF SUPEROBJECT}{TODO: KeyByIndex here.}
+    Result:='';
+  {$ELSE}
   Result:=FRootHolder.KeyByIndex[Idx];
+  {$ENDIF}
 {$ENDIF}
 end;
 
-function TSimpleVarHelper.GetVarObj(const VarName: String; out Obj: JSONObject): Boolean;
+function TSimpleVarHelper.GetVarObj(const VarName: String; out Obj: TJSONObj): Boolean;
 begin
 {$IFDEF NO_COMPLEXOBJ}
   Obj:=FValueHolder.OptJSONObject(VarName);
 {$ELSE}
-  Obj:=FRootHolder.OptJSONObject(VarName);
+  Obj:=FRootHolder.{$IFDEF SUPEROBJECT}GetO{$ELSE}OptJSONObject{$ENDIF}(VarName);
 {$ENDIF}
   Result:=Obj<>nil;
 end;
@@ -4710,8 +4928,9 @@ begin
     end;
     if (ObjName='') or (ObjName=Strings[Count-1]) then
     begin
+      {$IFDEF SUPEROBJECT}FValItfs.Delete(Count-1);{$ENDIF}
       Delete(Count-1);
-      FValueHolder:=JSONObject(Objects[Count-1]);
+      FValueHolder:=TJSONObj({$IFDEF SUPEROBJECT}FValItfs.Items{$ELSE}Objects{$ENDIF}[Count-1]);
       Result:=true;
       exit;
     end;
@@ -4722,32 +4941,32 @@ end;
 
 procedure TSimpleVarHelper.Put(const VarName: String; V: Double);
 begin
-  FValueHolder.Put(VarName,V);
+  FValueHolder.{$IFDEF SUPEROBJECT}PutD{$ELSE}Put{$ENDIF}(VarName,V);
 end;
 
 procedure TSimpleVarHelper.Put(const VarName: String; V: Boolean);
 begin
-  FValueHolder.Put(VarName,V);
+  FValueHolder.{$IFDEF SUPEROBJECT}PutB{$ELSE}Put{$ENDIF}(VarName,V);
 end;
 
 procedure TSimpleVarHelper.Put(const VarName, V: String);
 begin
-  FValueHolder.Put(VarName,V);
+  FValueHolder.{$IFDEF SUPEROBJECT}PutS{$ELSE}Put{$ENDIF}(VarName,V);
 end;
 
 procedure TSimpleVarHelper.Put(const VarName: String; V: Integer);
 begin
-  FValueHolder.Put(VarName,V);
+  FValueHolder.{$IFDEF SUPEROBJECT}PutI{$ELSE}Put{$ENDIF}(VarName,V);
 end;
 
 procedure TSimpleVarHelper.PutNull(const VarName: String);
 begin
-  FValueHolder.Put(VarName,CNULL);
+  FValueHolder.{$IFDEF SUPEROBJECT}PutO{$ELSE}Put{$ENDIF}(VarName,CNULL);
 end;
 
-function TSimpleVarHelper.SetObjectVar(const VarName: String; JObj: JSONObject): Boolean;
+function TSimpleVarHelper.SetObjectVar(const VarName: String; JObj: TJSONObj): Boolean;
 begin
-  FValueHolder.Put(VarName,JObj);
+  FValueHolder.{$IFDEF SUPEROBJECT}PutO{$ELSE}Put{$ENDIF}(VarName,JObj);
 end;
 
 procedure TSimpleVarHelper.SetOnTrace(const Value: TTraceValueFunc);
@@ -4772,7 +4991,7 @@ end;
 
 function TSimpleVarHelper.VarIsObj(const VarName: String): Boolean;
 begin
-  Result:=FValueHolder.Opt(VarName) is JSONObject;
+  Result:=FValueHolder.{$IFDEF SUPEROBJECT}GetO(VarName).DataType=stObject{$ELSE}Opt(VarName) is TJSONObj{$ENDIF};
 end;
 
 { TMemVarHelper }

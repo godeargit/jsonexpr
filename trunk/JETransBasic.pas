@@ -154,6 +154,8 @@ type
 
 implementation
 
+{$D+}
+
 {
 if 1=0 then
   a=2+3.02
@@ -1483,7 +1485,10 @@ begin
       end;
     end;
     if not FInEchoExpr then
-      SetCurToken('',tkSPACE,FCurPos);
+    begin
+      if CurToken.Kind<>tkLINEDIV then  //2012-08-03  <% %> 内已经加了换行符，无需Space
+        SetCurToken('',tkSPACE,FCurPos);
+    end;
     FCurPos:=APos;
     Result:=true;
   end

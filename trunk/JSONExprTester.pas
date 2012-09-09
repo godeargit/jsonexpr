@@ -16,8 +16,10 @@ unit JSONExprTester;
 
 interface
 
+//{$DEFINE SUPEROBJECT}
+
 uses
-  SysUtils, Variants, uJSON, UJSONExpr, JEParser;
+  SysUtils, Variants, {$IFDEF SUPEROBJECT}SuperObject{$ELSE}uJSON{$ENDIF}, UJSONExpr, JEParser;
 
 function TestJSONExprParser(out Msg: String): Boolean;
 
@@ -26,17 +28,17 @@ implementation
 var
   DebugMsg:String;
 
-procedure TraceLine(Sender: TObject; LineData: TZAbstractObject; const LineVal: Variant);
+procedure TraceLine(Sender: TObject; LineData: TJSONLeaf; const LineVal: Variant);
 var
   mstr:String;
 begin
   if LineData=nil then exit;
-  if LineData.ClassType<>JSONObject then
+  if LineData.{$IFDEF SUPEROBJECT}DataType<>stObject{$ELSE}ClassType<>JSONObject{$ENDIF} then
   begin
     mstr:='('+LineData.toString+')';
   end
   else begin
-    mstr:=JSONObject(LineData).OptString(JEP_Operator);
+    mstr:=TJSONObj(LineData).OptString(JEP_Operator);
     if mstr=';' then exit;
     mstr:='"'+mstr+'"';
   end;
@@ -51,7 +53,7 @@ end;
 function CheckParseText(const Text: String; var Msg: String;
   AParser: TJSONExprParser):Boolean;
 var
-  J:JSONObject;
+  J:TJSONObj;
   s1:String;
 begin
   Result:=true;
@@ -64,7 +66,7 @@ begin
       Result:=false;
       Msg:=Msg+#13#10+Text+' => '+s1;
     end;
-    Free;
+    {$IFNDEF SUPEROBJECT}Free{$ENDIF};
   end;
 end;
 
@@ -74,14 +76,14 @@ var
   ABasicParser, APhpJEParser: TJEParser;
   BasicJEPC, PhpJEPC: TJEParserClass;
   VHelper:TSimpleVarHelper;
-  J:JSONObject;
+  J:TJSONObj;
   mstr,mstr2,s1,s2:String;
   f,f2:Double;
   v:Variant;
   b:Boolean;
   procedure TestScriptVal(const Src: String; AVal: Variant);
   var
-    J:JSONObject;
+    J:TJSONObj;
   begin
     with AParser do
     begin
@@ -93,12 +95,12 @@ var
       Result:=false;
       Msg:=Msg+#13#10+(Src+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
     end;
-    J.Free;
+    {$IFDEF SUPEROBJECT}J:=nil{$ELSE}J.Free{$ENDIF};
   end;
   procedure TestLanScript(const Src: String; AVal: Variant; VName: String='');
   var
     b:Boolean;
-    J:JSONObject;
+    J:TJSONObj;
   begin
     ABasicParser.Source:=Src;
     J:=ABasicParser.DoParse;
@@ -115,12 +117,12 @@ var
       Result:=false;
       Msg:=Msg+#13#10+(Src+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
     end;
-    J.Free;
+    {$IFDEF SUPEROBJECT}J:=nil{$ELSE}J.Free{$ENDIF};
   end;
   procedure CheckLanTrans(SrcLan, DestLan: TJEParser; const Src, Dest: String);
   var
     b:Boolean;
-    J:JSONObject;
+    J:TJSONObj;
     OutTxt,mstr,mstr2:String;
     n:Integer;
   begin
@@ -158,11 +160,12 @@ var
         end;        
       end;
     end;
-    J.Free;
+    {$IFDEF SUPEROBJECT}J:=nil{$ELSE}J.Free{$ENDIF};
   end;
 begin
   Msg:='';
   Result:=true;
+  SimpleJSON:=true; //2012-08-23
   VHelper:=TSimpleVarHelper.Create;
   AParser:=TJSONExprParser.Create;
   with AParser do
@@ -177,7 +180,7 @@ begin
         Result:=false;
         Msg:=Msg+#13#10+(mstr+#13#10'=>'#9+toString2(2));
       end;
-      Free;
+      {$IFNDEF SUPEROBJECT}Free;{$ENDIF}
     end;
     mstr:='-X+2.5';
     with ExprToJSON(mstr) do
@@ -187,7 +190,7 @@ begin
         Result:=false;
         Msg:=Msg+#13#10+(mstr+#13#10'=>'#9+toString2(2));
       end;
-      Free;
+      {$IFNDEF SUPEROBJECT}Free;{$ENDIF}
     end;
     mstr:='Sin(Y)';
     with ExprToJSON(mstr) do
@@ -197,7 +200,7 @@ begin
         Result:=false;
         Msg:=Msg+#13#10+(mstr+#13#10'=>'#9+toString2(2));
       end;
-      Free;
+      {$IFNDEF SUPEROBJECT}Free;{$ENDIF}
     end;
     mstr:='2 + X * Sin(Y)';
     J:=ExprToJSON(mstr);
@@ -213,7 +216,7 @@ begin
         Result:=false;
         Msg:=Msg+#13#10+JSONToExpr(J)+#13#10+JSONToExpr(J,0);
       end;
-      Free;
+      {$IFNDEF SUPEROBJECT}Free;{$ENDIF}
     end;
     mstr:='Z+X * 2-Y';
     J:=ExprToJSON(mstr);
@@ -229,7 +232,7 @@ begin
         Result:=false;
         Msg:=Msg+#13#10+JSONToExpr(J)+#13#10+JSONToExpr(J,MaxInt);
       end;
-      Free;
+      {$IFNDEF SUPEROBJECT}Free;{$ENDIF}
     end;
     mstr:='2+Z+X*2/Y'; mstr2:='2+Z+(X*2)/Y';
     s1:=ExprToJSONStr(mstr);
@@ -266,7 +269,7 @@ begin
         Result:=false;
         Msg:=Msg+#13#10+(JSONToExpr(J));
       end;
-      Free;
+      {$IFNDEF SUPEROBJECT}Free{$ENDIF};
     end;
     mstr:='A IS NOT NULL';
     with ExprToJSON(mstr) do
@@ -276,7 +279,7 @@ begin
         Result:=false;
         Msg:=Msg+#13#10+(mstr+#13#10'=>'#9+toString2(2));
       end;
-      Free;
+      {$IFNDEF SUPEROBJECT}Free{$ENDIF};
     end;
     mstr:='Fn_1(-A)+(-X)';
     with ExprToJSON(mstr) do
@@ -286,7 +289,7 @@ begin
         Result:=false;
         Msg:=Msg+#13#10+(mstr+#13#10'=>'#9+toString);
       end;
-      Free;
+      {$IFNDEF SUPEROBJECT}Free{$ENDIF};
     end;
     mstr:='IIF(X>=0,X,Y-X+Power(Ln(Z),3))-100';
     J:=ExprToJSON(mstr);
@@ -303,7 +306,7 @@ begin
         Result:=false;
         Msg:=Msg+#13#10+mstr+' => '+s1;
       end;
-      Free;
+      {$IFNDEF SUPEROBJECT}Free{$ENDIF};
     end;
     mstr:='(Round(PI*$v1)^~36*2)-100';
     J:=ExprToJSON(mstr);
@@ -320,7 +323,7 @@ begin
         Result:=false;
         Msg:=Msg+#13#10+mstr+' => '+s1;
       end;
-      Free;
+      {$IFNDEF SUPEROBJECT}Free{$ENDIF};
     end;
     mstr:='Name1 in ( ''M''+''ike'' , '''', ''Nike'' , @@Name )';
     J:=ExprToJSON(mstr);
@@ -337,7 +340,7 @@ begin
         Result:=false;
         Msg:=Msg+#13#10+mstr+' => '+s1;
       end;
-      Free;
+      {$IFNDEF SUPEROBJECT}Free{$ENDIF};
     end;
     mstr:='-9*(Sqrt(36+ABS(Sin(PI*0.5)*2))-(300*Money))';
     with ExprToJSON(mstr) do
@@ -347,7 +350,7 @@ begin
         Result:=false;
         Msg:=Msg+#13#10+(mstr+#13#10'=>'#9+toString2(2));
       end;
-      Free;
+      {$IFNDEF SUPEROBJECT}Free{$ENDIF};
     end;
     VHelper.Put('Z',3.5);
     VHelper.PutNull('Y');
@@ -360,7 +363,7 @@ begin
         Result:=false;
         Msg:=Msg+#13#10+(mstr+#13#10'=>'#9+toString2(2));
       end;
-      Free;
+      {$IFNDEF SUPEROBJECT}Free{$ENDIF};
     end;
     UseVarHelperOnParse:=false;
     mstr:='(100*{op:"AVG",p1:"Qty*Price"})/{op:"MAX",p1:"Income",at:"Year"}';
@@ -371,7 +374,7 @@ begin
         Result:=false;
         Msg:=Msg+#13#10+(mstr+#13#10'=>'#9+toString2(2));
       end;
-      Free;
+      {$IFNDEF SUPEROBJECT}Free{$ENDIF};
     end;
     mstr:='Left(X,4)=''YEAR'' OR ((Y Like ''%2009%'') AND (X IS NULL))';
     J:=ExprToJSON(mstr);
@@ -387,7 +390,7 @@ begin
         Result:=false;
         Msg:=Msg+#13#10+(JSONToExpr(J));
       end;
-      Free;
+      {$IFNDEF SUPEROBJECT}Free{$ENDIF};
     end;
     mstr:='())X T^!15,Y-3 999*not False-Z >';
     J:=ExprToJSON(mstr);
@@ -398,7 +401,7 @@ begin
         Result:=false;
         Msg:=Msg+#13#10+(mstr+#13#10'=>'#9+toString2(2));
       end;
-      Free;
+      {$IFNDEF SUPEROBJECT}Free{$ENDIF};
     end;
     mstr:='DatePart(day,getdate())';
     J:=ExprToJSON(mstr);
@@ -415,7 +418,7 @@ begin
         Result:=false;
         Msg:=Msg+#13#10+mstr+' => '+s1;
       end;
-      Free;
+      {$IFNDEF SUPEROBJECT}Free;{$ENDIF}
     end;
     mstr:='include ''AAA.asp'';include ''const.asp'';DIM i';
     if not CheckParseText(mstr,Msg,AParser) then Result:=false;
@@ -443,7 +446,7 @@ begin
     if not CheckParseText(mstr,Msg,AParser) then Result:=false;
     mstr:='A:=-10;--A;A++;-A';
     if not CheckParseText(mstr,Msg,AParser) then Result:=false;
-    Free;
+    {$IFNDEF SUPEROBJECT}Free;{$ENDIF}
   end;
   //Eval Test
   VHelper.Clean;
@@ -467,7 +470,7 @@ begin
         Msg:=Msg+#13#10+(Format('%s'#13#10'=>'#13#10'%s'#13#10'=> %f  !=  (%f)',[mstr,J.toString,f,f2]));
       end;
     end;
-    J.Free;
+    {$IFDEF SUPEROBJECT}J:=nil{$ELSE}J.Free{$ENDIF};
     mstr:='X+2 in (null,2<>3,2+3*1)';
     UseVarHelperOnParse:=true;
     J:=ExprToJSON(mstr);
@@ -477,7 +480,7 @@ begin
       Result:=false;
       Msg:=Msg+#13#10+(mstr+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
     end;
-    J.Free;
+    {$IFDEF SUPEROBJECT}J:=nil{$ELSE}J.Free{$ENDIF};
     UseVarHelperOnParse:=false;
     mstr:='i:=0;c:=0;n:=Times(10,i+=4;if(i%3=0,continue,i>30,break);c++;i++));c*=n';
     J:=ExprToJSON(mstr);
@@ -487,7 +490,7 @@ begin
       Result:=false;
       Msg:=Msg+#13#10+(mstr+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
     end;
-    J.Free;
+    {$IFDEF SUPEROBJECT}J:=nil{$ELSE}J.Free{$ENDIF};
     mstr:='A:=3;B:=A++;B-=(A++);B--';
     UseVarHelperOnParse:=false;
     J:=ExprToJSON(mstr);
@@ -497,7 +500,7 @@ begin
       Result:=false;
       Msg:=Msg+#13#10+(mstr+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
     end;
-    J.Free;
+    {$IFDEF SUPEROBJECT}J:=nil{$ELSE}J.Free{$ENDIF};
     mstr:='(X=3) in (null,2<>3,2+3*1)';
     J:=ExprToJSON(mstr);
     v:=Eval(J);
@@ -506,7 +509,7 @@ begin
       Result:=false;
       Msg:=Msg+#13#10+(mstr+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
     end;
-    J.Free;
+    {$IFDEF SUPEROBJECT}J:=nil{$ELSE}J.Free{$ENDIF};
     UseVarHelperOnParse:=false;
     //Cycle test
     TestScriptVal('n:=0; For(i:=1, i<=100, Inc(i), n:=n+i); n',5050);
@@ -534,7 +537,7 @@ begin
       Result:=false;
       Msg:=Msg+#13#10+(mstr+#13#10+JSONToExpr(J)+#13#10'Eval =>'#9+VarToStrDef(v,'N/A'));
     end;
-    J.Free;
+    {$IFDEF SUPEROBJECT}J:=nil{$ELSE}J.Free{$ENDIF};
     // ";" 前无语句
     TestScriptVal('z:=2;if(1>0,;a:=3,b:=4;z:=5);a*z=6',true);
     //无参数函数跟加减表达式解析测试
@@ -573,7 +576,7 @@ begin
     end;
     if DebugMsg<>'' then
       Msg:=Msg+#13#10'Debug Message:'#13#10+DebugMsg;
-    J.Free;
+    {$IFDEF SUPEROBJECT}J:=nil{$ELSE}J.Free{$ENDIF};
     DebugMsg:='';
     //String expression, Special variable name.
     mstr:='"Str~1":=#13#10''Hello World!''#9; 字符串2:=''你好'' #32+''世界'' ''!''; Result:=Len("Str~1")>Len(字符串2);';
@@ -591,7 +594,7 @@ begin
     end;
     if DebugMsg<>'' then
       Msg:=Msg+#13#10'Debug Message:'#13#10+DebugMsg;
-    J.Free;
+    {$IFDEF SUPEROBJECT}J:=nil{$ELSE}J.Free{$ENDIF};
     DebugMsg:='';
     BasicJEPC:=TJEParser.GetParserForLan('Basic');
     if BasicJEPC<>nil then
@@ -646,7 +649,7 @@ begin
   J:=JSONObject.Create;
   VHelper.ValExport(J);
   Msg:=Msg+#13#10#13#10+J.ToString;
-  J.Free;
+  {$IFDEF SUPEROBJECT}J:=nil{$ELSE}J.Free{$ENDIF};
   VHelper.Free;
   DebugMsg:='';
 end;
