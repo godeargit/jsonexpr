@@ -538,7 +538,7 @@ type
     class function GetParserForLan(ALan: String):TJEParserClass;
     class function LanCount:Integer;
     class function Lans(const Index: Integer):TJEParserClass;
-    class function StrIsVar(const AString: String):Boolean; inline;
+    class function StrIsVar(const AString: String):Boolean; {$IFDEF INLINE_OPT}inline;{$ENDIF}
     class function LanHasResultVar(const ALan: String):Boolean;
     function DoParse:TJEBranch; virtual;
     procedure RegGlobalEnv;
@@ -2169,7 +2169,8 @@ begin
               'F':
                 if Op=JEF_For then begin Result:=TransFOR(JObj,Ident); exit; end;
               'I':
-                if Op=JEF_Inc then begin Result:=TransINC(JObj,Ident); exit; end;
+                if Op=JEF_Inc then begin Result:=TransINC(JObj,Ident); exit; end
+                else if Op=JEF_IIF then begin Result:=TransIIF(JObj,Ident); exit; end;
               'N':
                 if Op=JEF_New then begin Result:=TransNEW(JObj,Ident); exit; end;
             end;
@@ -2738,6 +2739,16 @@ begin
       Z:=Remove(mstr);
       JN.Put(JEP_Operator,Z);
       Put(mstr,JN);
+      //2012-08-03  处理无外层操作符的简单语句
+      if OptString(JEP_Operator)='' then
+      begin
+        Put(JEP_Operator,OpCh_Sentence);
+        with FLevelNodes[FCurNodeLevel-1] do
+        begin
+          Op:=OpCh_Sentence;
+          OpKind:=jokSentenceDiv;
+        end;
+      end;
     end;
     Obj:=JN;
     Op:=Z.toString;
@@ -2955,6 +2966,7 @@ function TJEParser.DoParse: JSONObject;
 var
   kwidx,LastPos:Integer;
 begin
+  LastPos:=0;
   DoInit;
   //if FCurPos=0 then
     NextToken;
@@ -2962,7 +2974,7 @@ begin
   begin
     LastPos:=FCurPos;
     ParseStatements;
-    if FCurPos=LastPos then
+    if (FCurPos=LastPos) and (FCurToken.Kind<>tkEND) then
     begin
       PrintErr('Cycle on ['+IntToStr(LastPos)+'] "'+FCurToken.Token+'" after "'+FLastToken.Token+'".');
       NextToken;
@@ -3835,7 +3847,7 @@ begin
         repeat
           Inc(i);
           if i>n then break;
-        until (FSource[i]=C2) and (Copy(FSource[i],SLen)=mstr);
+        until (FSource[i]=C2) and (Copy(FSource,i,SLen)=mstr);
         Inc(i,SLen);
         break;
       end
@@ -3874,7 +3886,7 @@ begin
       repeat
         StrVal:=StrVal+FSource[i];
         Inc(i);
-        if i>n then break;        
+        if i>n then break;
       until not (FSource[i] in FVBody);
       SetCurToken(StrVal,tkWORD,FCurPos);
       Result:=StrVal;
@@ -3885,7 +3897,7 @@ begin
       repeat
         StrVal:=StrVal+FSource[i];
         Inc(i);
-        if i>n then break;        
+        if i>n then break;
       until not (FSource[i] in FVBody);
       SetCurToken(StrVal,tkWORD,FCurPos);
       Result:=StrVal;
@@ -4418,6 +4430,9 @@ begin
       end;
     end;
     NextToken;
+    //2012-08-03  考虑最后一行
+    if CurToken.Kind=tkEnd then
+      if FLineBreakSentence then TryTransOneWordStatement;
   end;
 end;
 

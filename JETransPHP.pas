@@ -245,26 +245,29 @@ var
   OpRanks:TStringList;
 
 {
-运算符的计算优先级顺序如下：
-
-算术运算符和串联运算符
-求幂 (^)
-一元标识和非（+、–）
-乘法和浮点除法（*、/）
-整数除法 (\)
-取模 (Mod)
-加法和减法（+、–），字符串连接 (+)
-字符串连接 (&)
-算术移位（<<、>>）
-
-比较运算符
-所有比较运算符（=、<>、<、<=、>、>=、Is、IsNot、Like、TypeOf...Is）
-
-逻辑运算符和位运算符
-非 (Not)
-与 (And、AndAlso)
-或 (Or、OrElse)
-异或 (Xor)
+下表从低到高列出了运算符的优先级。
+结合方向 运算符
+左 ,
+左 or
+左 xor
+左 and
+右 print
+右 = += -= *= /= .= %= &= |= ^= ~= <<= >>=
+左 ? :
+左 ||
+左 &&
+结合方向 运算符
+左 |
+左 ^
+左 &
+无 == != === !==
+无 < <= > >=
+左 << >>
+左 + - .
+左 * / %
+右 ! ~ ++ -- (int) (float) (string) (array) (object) @
+右 [
+无 new 
 }
 procedure InitOpRank;
 var
@@ -273,28 +276,27 @@ begin
   OpRanks:=TStringList.Create;
   //OpRank[OpCh_Func]:=OpRank_Func;  //Function
   r:=240;
-  OpRank['.']:=r; OpRank['[']:=r; Dec(r,20);
-  OpRank['^']:=r; Dec(r,10);
-  OpRank['*']:=r; OpRank['/']:=r; Dec(r,20);
-  OpRank['\']:=r; Dec(r,20);
-  OpRank['%']:=r; OpRanks.AddObject('MOD',TObject(r)); Dec(r,20);
-  OpRank['+']:=r; OpRank['-']:=r; Dec(r,10);
-  OpRank['&']:=r; Dec(r,10);
+  OpRank['[']:=r; Dec(r,10);
+  OpRank['!']:=r; OpRank['~']:=r; OpRank['@']:=r; OpRanks.AddObject('++',TObject(r)); OpRanks.AddObject('--',TObject(r)); Dec(r,10);
+  OpRank['*']:=r; OpRank['/']:=r; OpRank['%']:=r; Dec(r,20);
+  OpRank['+']:=r; OpRank['-']:=r; OpRank['.']:=r; Dec(r,10);
+  OpRanks.AddObject('<<',TObject(r)); OpRanks.AddObject('>>',TObject(r)); Dec(r,10);
   {RK_Shift:=r;}    Dec(r,10);   // << >>  <<<  >>>
   OpRank['=']:=r; OpRank['>']:=r; OpRank['<']:=r;
-  OpRanks.AddObject('<>',TObject(r));
   OpRanks.AddObject('>=',TObject(r));
   OpRanks.AddObject('<=',TObject(r)); Dec(r,10);
+  OpRanks.AddObject('==',TObject(r)); OpRanks.AddObject('!=',TObject(r));
+  OpRanks.AddObject('===',TObject(r)); OpRanks.AddObject('!==',TObject(r));
   Dec(r,20);
-  OpRanks.AddObject('NOT',TObject(r)); Dec(r,10);
-  OpRanks.AddObject('AND',TObject(r));
-  OpRanks.AddObject('ANDALSO',TObject(r)); Dec(r,10);
-  OpRanks.AddObject('OR',TObject(r));
-  OpRanks.AddObject('ORELSE',TObject(r)); Dec(r,10);
+  OpRank['&']:=r; Dec(r,10);
+  OpRank['^']:=r; Dec(r,10);
+  OpRank['!']:=r; Dec(r,10);
+  OpRanks.AddObject('&&',TObject(r)); OpRanks.AddObject('||',TObject(r)); Dec(r,10);
+  OpRank['?']:=r; Dec(r,20);
+  OpRank['=']:=r; Dec(r,10);
+  OpRanks.AddObject('AND',TObject(r)); Dec(r,10);
   OpRanks.AddObject('XOR',TObject(r)); Dec(r,10);
-  //OpRank[':']:=r; RK_SetValue:=r; Dec(r,10);  //:=
-  //OpRank[',']:=r; Dec(r,10);  // ,
-  //OpRank[';']:=r; RK_Sentence:=r; //Sentence end
+  OpRanks.AddObject('OR',TObject(r)); Dec(r,10);
   OpRanks.CaseSensitive:=true;
   OpRanks.Sorted:=true;
 end;
@@ -473,7 +475,7 @@ begin
       else if StdOp='NOT' then
         Result:='!'
       else if StdOp='XOR' then
-        Result:='';
+        Result:='^';
     end;
   end;
 end;
@@ -875,7 +877,7 @@ begin
     for i:=1 to Pred(length()) do
     begin
       if Keys[i]=JEP_Perfix then continue;
-      Result:=Result+TransCONST1(TJEBranch(ValObjByIndex[i]),0);
+      Result:=Result+IdentLen(Ident)+TransCONST1(TJEBranch(ValObjByIndex[i]),0);
     end;
 end;
 
@@ -1202,6 +1204,13 @@ begin
           Result:=TransFuncOp(TJEBranch(JObj),'strtolower',Ident)
         else if OpName='LEN' then
           Result:=TransFuncOp(TJEBranch(JObj),'strlen',Ident)
+      end;
+      'M':
+      begin
+        if OpName='MID' then  //2012-08-06   Mid(Str,A,B) => substr(Str,A-1,B)
+          with TJEBranch(JObj) do
+            Result:=IdentLen(Ident)+'substr('+TransANode(Opt(JEP_Param1),0)+','
+              +TransANode_Dec1(Opt(JEP_Param2),0)+','+TransANode(Opt(JEP_Param3),0)+')';
       end;
       'U':
       begin

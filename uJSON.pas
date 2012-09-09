@@ -373,10 +373,11 @@ var
   CNULL: _NULL;
   //Set this var to ture to force unicode char (eg: Chinese...) output in the form of \uXXXX 
   UnicodeOutput: Boolean=false;
+  SimpleJSON: Boolean=false;  //2012-08-03
 
 implementation
 
-{$D-}
+//{$D-}
 
 const
   CROTINA_NAO_IMPLEMENTADA :string = 'Not imp';
@@ -485,7 +486,7 @@ begin
   if l=0 then exit;  
   if S[1]='$' then
     n:=2
-  else if (n>=2) and (S[2] in ['x','X']) then
+  else if (l>=2) and (S[2] in ['x','X']) then
     n:=3
   else
     n:=1;
@@ -2027,7 +2028,7 @@ begin
         sb:= sb + ',';
       end;
       o:=_keys[i];
-      if IsSimpString(o) then //By creation_zy
+      if SimpleJSON and IsSimpString(o) then //By creation_zy
         sb:=sb + o
       else
         sb:=sb + quote(o);
