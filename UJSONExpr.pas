@@ -164,6 +164,12 @@ ver 0.5.0  By creation_zy
 ver 0.5.1  By creation_zy
   Bug fix for "IIF".
   Support SuperObject JSON Toolkit -- Just can be compiled.
+  Core unit can be compiled in Delphi 7.
+
+2013-03-31
+ver 0.5.2  By creation_zy
+  Support "Session" var in language translating.
+  Can keep comment in translating.
 }
 
 unit UJSONExpr;
@@ -201,6 +207,7 @@ const
   JEP_Param4='p4';
   JEP_StrParamHeader='''';    //为了将字符串与变量名相区别，所有字符串值均带单引号前缀
   JEP_TypeHead='?';           //十六进制、八进制、二进制、日期、时间等类型的头部标识
+  JEP_SpaceBreak=';S';        //空断句（主要用于表示语句和注释之间的非换行隔断）
   JEPT_Hex='H';
   JEPT_Oct='O';
   JEPT_Bin='B';
@@ -248,6 +255,10 @@ const
   JEF_Wait='WAIT';
   JEF_While='WHILE';          // While BoolExpr ...
   JEF_WhileNot='WHILENOT';    // While NOT BoolExpr ...
+  JEF_Rem='REM';              // Line commet
+  JEF_Comment='COMMENT';      // Block commet
+  JEF_DocRem='DOCREM';        // Document commet
+  JEF_DirRem='DIRREM';        // Directive commet
   //定义相关关键字
   JED_HeadChar=' ';
   JED_Proc='PROCEDURE';         //方法
@@ -264,6 +275,10 @@ const
   JEDN_Implement='IMPLEMENT';   //实现(接口)
   JEV_Result='RESULT';          //返回值(变量)
   JEV_ResultRep='ResulT';       //用于代换的 返回值(变量)
+  JEP_Session='Session';        //Web脚本中的会话对象
+  //
+  JEH_LineRem='//';             //单行注释
+  JEH_DocRem='///';             //文档注释
   OpRank_Func:Byte=255;
   //Std chars
   Digits: set of Char=['0'..'9'];
@@ -523,8 +538,9 @@ function GetStdOpRank(FirstCh: Char; const Op: String):Byte;
 var
   DblQuotationAsString:Boolean=false;    //是否将双引号内的内容当成字符串
   UpperCaseNormalFuncName:Boolean=true;  //是否将一般的函数名转换成大写（引号内的函数名不做处理）
+  Keep_Comment:Boolean=true;  //2013-03-29  是否保留代码中的注释
   OpRank:array [TOpChar] of Byte;  //操作符优先级表（根据操作符的首字母来确定）
-  RK_Multi, RK_Add, RK_Shift, RK_Compare, RK_SetValue, RK_Block, RK_Sentence:Byte;
+  RK_Multi, RK_Add, RK_Shift, RK_Compare, RK_SetValue, RK_Block, RK_Sentence, RK_SpaceBreak:Byte;
 
 implementation
 
@@ -625,6 +641,7 @@ begin
   OpRank[',']:=r; Dec(r,10);  // ,
   OpRank[';']:=r; RK_Sentence:=r; //Sentence end
   OpRank[OpCh_Define]:=r+2;  //Define  2011-09-18
+  RK_SpaceBreak:=RK_Sentence-1; //2013-03-31
 end;
 
 function GetStdOpRank(FirstCh: Char; const Op: String):Byte;
@@ -3686,10 +3703,10 @@ var
     Result:=true;
   end;
 var
-  i,s,OriLv: Integer;
+  i,s,OriLv,i0: Integer;
   FuncName: String;
   ExprStart: Boolean;
-  StrValue: string;
+  StrValue, mstr: string;
   CW,Cnt:Word;
   Ch:Char;
   WCh:WideChar;
@@ -3870,11 +3887,34 @@ begin
           end;
           if Length(StrValue)>=2 then  //  '//' or more...
           begin
+            if Keep_Comment then i0:=i;
             while true do
             begin
               if SubString[I] in [#13,#10,#0] then break;
               Inc(i);
             end;
+            if Keep_Comment and (i>i0) then
+            begin
+              mstr:=Copy(SubString,i0,i-i0);
+              if Length(StrValue)>=3 then  //以 /// 开始的注释——当成文档
+              begin
+               // mstr:=Copy(SubString,i0,i-i0);
+                AddOp(JEF_DocRem,amFunc);
+              end
+              else if mstr[1]='$' then  //以 //$ 开始的注释——当成编译指示
+              begin
+                AddOp(JEF_DirRem,amFunc);
+                Delete(mstr,1,1);
+              end
+              else
+                AddOp(JEF_Rem,amFunc);
+              Inc(BlockCnt);
+              //FuncName:='';
+              Levels[JLevel].BC:=BlockCnt-1;
+              WriteStr(mstr);
+              Dec(BlockCnt);
+              AddLineDiv;
+            end;  
             continue;
           end;
         end;
@@ -4490,7 +4530,7 @@ end;
 
 class function TJSONExprParser.Version: ShortString;
 begin
-  Result:='0.5.0';
+  Result:='0.5.2';
 end;
 
 { TJEVarHelper }

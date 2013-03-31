@@ -73,14 +73,15 @@ end;
 function TestJSONExprParser(out Msg: String): Boolean;
 var
   AParser: TJSONExprParser;
-  ABasicParser, APhpJEParser: TJEParser;
-  BasicJEPC, PhpJEPC: TJEParserClass;
+  ABasicParser, APhpJEParser, APascalJEParser: TJEParser;
+  BasicJEPC, PhpJEPC, PascalJEPC: TJEParserClass;
   VHelper:TSimpleVarHelper;
   J:TJSONObj;
   mstr,mstr2,s1,s2:String;
   f,f2:Double;
   v:Variant;
   b:Boolean;
+  Old_KeepComment:Boolean;
   procedure TestScriptVal(const Src: String; AVal: Variant);
   var
     J:TJSONObj;
@@ -615,6 +616,8 @@ begin
       TestLanScript('b1=false'#13#10'b=b1=false and not (1<0)',true,'b');
       TestLanScript('if (2<=1 or 1<2) and not (1=0) then a=10 else a=1',10,'a');
       TestLanScript('if (1>2) or (2>=1 and 1<>0) then a=100 else a=20',100,'a');
+      TestLanScript('a=10 : if -a<1 then a=100 else a=20',100,'a');   //负号对语句内表达式的影响
+      TestLanScript('i=1 : n=0 : do while i<10 : n=n+i : i=i+1 : loop',45,'n');  //do while ... loop 语句
       TestLanScript('a="123"'#13#10'b=a+"abc"&a','123abc123','b');
       if Result then
         Msg:=Msg+#13#10'Basic OK!';
@@ -626,9 +629,12 @@ begin
         CheckLanTrans(ABasicParser,APhpJEParser,'if A then:B:C:end if','<?php if($A){B();C();} ?>');
         CheckLanTrans(ABasicParser,APhpJEParser,'if a then:a=new C:set b=new xx(123):xxx:end if',
           '<?php if($a){ $a=new C(); $b=new xx(123); xxx();} ?>');
+        Old_KeepComment:=Keep_Comment;
+        Keep_Comment:=false;
         CheckLanTrans(ABasicParser,APhpJEParser,'if L>0 then'#13#10'  if 1=X then'
           +#13#10'    ''??'#13#10'    A=B'#13#10'  end if'#13#10'end if',
           '<?php if($L>0){if(1==$X){$A=$B;}}?>');
+        Keep_Comment:=Old_KeepComment;
         CheckLanTrans(ABasicParser,APhpJEParser,'if A>B then X=A','<?php if($A>$B){$X=$A;} ?>');
         CheckLanTrans(ABasicParser,APhpJEParser,'redim a(10*N,2,c-1)',
           '<?php $a=array_fill(0,(10*$N+1),array_fill(0,3,array_fill(0,$c,null))); ?>');
@@ -638,9 +644,35 @@ begin
         CheckLanTrans(ABasicParser,APhpJEParser,'a=-b','<?php $a=-$b; ?>');
         CheckLanTrans(ABasicParser,APhpJEParser,'a=-(b+2)','<?php $a=-($b+2); ?>');
         CheckLanTrans(ABasicParser,APhpJEParser,'if a=-(b+2) then c=1','<?php if($a==-($b+2)){$c=1;} ?>');
+        if Use_Session then  //2013-03-29
+        begin
+          CheckLanTrans(ABasicParser,APhpJEParser,'session("id")=123.4','<?php $_SESSION[''id'']=123.4; ?>');
+        end;
+        if Keep_Comment then  //2013-03-30
+        begin
+          CheckLanTrans(ABasicParser,APhpJEParser,'A=1 ''A <= 1','<?php $A=1; //A <= 1'#13#10'?>');
+        end;
         if Result then
-          Msg:=Msg+#13#10'PHP OK!';
+          Msg:=Msg+#13#10'Basic->PHP OK!';
         APhpJEParser.Free;
+      end;
+      PascalJEPC:=TJEParser.GetParserForLan('Pascal');
+      if PascalJEPC<>nil then
+      begin
+        APascalJEParser:=PascalJEPC.Create;
+        CheckLanTrans(ABasicParser,APascalJEParser,'if A then'#13#10'  B'#13#10'  C'#13#10'end if','if A then begin B(); C(); end;');
+        CheckLanTrans(ABasicParser,APascalJEParser,'if -a=2 then:b=2:end if','if -a=2 then begin b:=2; end;');
+        CheckLanTrans(ABasicParser,APascalJEParser,'<%if A then%>?<%else%>.<%end if%>',
+          'if A then begin Echo(''?''); end else begin Echo(''.''); end;');
+        CheckLanTrans(ABasicParser,APascalJEParser,'<%if b then%>@<%else%>*<%end if%>.',
+          'if b then begin Echo(''@''); end else begin Echo(''*''); end; Echo(''.'');');
+        CheckLanTrans(ABasicParser,APascalJEParser,'<%if 10>2 then a.Wt "1" else%>abc',
+          'if 10>2 then begin a.Wt(''1''); end; Echo(''abc'');');
+        CheckLanTrans(ABasicParser,APascalJEParser,'if a then Call F(121)',
+          'if a then begin {Basic.CALL}F(121); end;');
+        if Result then
+          Msg:=Msg+#13#10'Basic->Pascal OK!';
+        APascalJEParser.Free;
       end;
       ABasicParser.Free;
     end;
