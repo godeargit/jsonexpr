@@ -57,7 +57,7 @@ type
     function GetStrChCharSet:TJECharSet; override;
     function GetMathOpCharSet:TJECharSet; override;
     function GetSpecialCharSet:TJECharSet; override;
-    function GetLineCommetOps:TStrings; override;
+    function GetLineCommentOps:TStrings; override;
     function GetOpInfo(var Op: String; out IsOp2: Boolean; out Rank: Byte):Boolean; override;
     function GetOpRank(const Op: String):Byte; override;
     function GetSetValOpRank:Byte; override;
@@ -96,7 +96,7 @@ type
     function Parse_Sub(const PerfixStr: String; NeedNext: Boolean):Integer;
     function Parse_Func(const PerfixStr: String; NeedNext: Boolean):Integer;
     function StrOpResultIsString(const StrVal: String; BranchNode: TJEBranch):TBool3; override;
-    procedure PushHTMLStr(const Text:String; AddLnBreak: Boolean=true);
+    procedure PushRawText(const Text:String; AddLnBreak: Boolean=true); override;
   public
     property TransForToFOR:Boolean read FTransForToFOR write SetTransForToFOR;
     property ASPMode:Boolean read FASPMode;
@@ -132,15 +132,18 @@ type
     function TransWHILE(JObj: TJEBranch; Ident: Integer):String; override;
     function TransWHILENOT(JObj: TJEBranch; Ident: Integer):String; override;
     function TransREPEAT(JObj: TJEBranch; Ident: Integer):String; override;
-    function TransPROCEDURE(JObj: TJEBranch; Ident: Integer):String; override;
-    function TransFUNCTION(JObj: TJEBranch; Ident: Integer):String; override;
     function TransVAR(JObj: TJEBranch; Ident: Integer):String; override;
     function TransCONST(JObj: TJEBranch; Ident: Integer):String; override;
     function TransCLASS(JObj: TJEBranch; Ident: Integer):String; override;
+    function Trans_BodyDef(JObj: TJENode; Ident: Integer; const ObjName: String):String; override;
     function StdMakeBlock(const Str, IdentStr:String; NoHeadIdent: Boolean):String; override;
     function StdMakeIfThen(const Expr, IdentStr: String):String; override;
     function StdMakeElseIf(const Expr, IdentStr: String):String; override;
     function StdMakeElseEnd(IsElse: Boolean; const IdentStr: String):String; override;
+    function StdMakeFuncHead(const FuncName, Perfix, ParamStr, TypeStr, IdentStr: String;
+      IsProc: Boolean):String; override;
+    function StdMakeFuncBody(const FuncBody, IdentStr: String;
+      IsProc: Boolean):String; override;
     class function GetFilePostfixs:TStrings; override;
   public
     class function Lan:ShortString; override;
@@ -178,6 +181,7 @@ const
   //JBasic_SHR='SHR';
   //JBasic_SHL='SHL';
   JBasic_SetValue='=';
+  JBasic_RawEnd='<%';
 
 var
   SingleOpMap:array [Char] of String;
@@ -715,9 +719,29 @@ begin
   Result:=#13#10+IdentStr+'ElseIf '+Expr+' then';
 end;
 
+function TJEBasicParser.StdMakeFuncBody(const FuncBody, IdentStr: String;
+  IsProc: Boolean): String;
+begin
+  Result:=#13#10+IdentStr+FuncBody+#13#10+IdentStr+'End ';
+  if IsProc then
+    Result:=Result+'Sub'
+  else
+    Result:=Result+'Function';
+end;
+
+function TJEBasicParser.StdMakeFuncHead(const FuncName, Perfix, ParamStr,
+  TypeStr, IdentStr: String; IsProc: Boolean): String;
+begin
+  Result:=IdentStr;
+  if Perfix<>'' then Result:=Result+' '+Perfix+' ';
+  if IsProc then Result:=Result+'Sub ' else Result:=Result+'Function ';
+  Result:=Result+FuncName+'('+ParamStr+')';
+  if not IsProc and (TypeStr<>'') then Result:=Result+' '':'+TypeStr;
+end;
+
 function TJEBasicParser.StdMakeIfThen(const Expr, IdentStr: String): String;
 begin
-  Result:=IdentStr+'If '+Expr+' then';
+  Result:=IdentStr+'If '+Expr+' Then';
 end;
 
 function TJEBasicParser.StrForLan(const Str: String): String;
@@ -866,7 +890,7 @@ begin
     1:
     begin
       Ch:=Op[1];
-      if Ch in ['%','\','&','|','^','!'] then
+      if Ch in ['%','\','&','|','^'] then
       begin
         Result:=Trans_Mid(JObj,SingleOpMap[Op[1]],GetOpRank(Op),PrnRank);
         exit;
@@ -976,8 +1000,27 @@ begin
 end;
 
 function TJEBasicParser.TransFOR(JObj: TJEBranch; Ident: Integer): String;
+var
+  Z:TJENode;
+  mstr:String;
 begin
-
+  Result:=IdentLen(Ident)+'''JE::FOR Begin'#13#10;
+  Result:=Result+TransANode(JObj.Opt(JEP_Param1),Ident);
+  Result:=Result+#13#10+IdentLen(Ident)+'Do'+#13#10;
+  Result:=Result+IdentLen(Ident+1)+'If not ('+TransANode(JObj.Opt(JEP_Param2),0)+') Then  Exit Do'+#13#10;
+  SetNextNeedVal(false);
+  Result:=Result+TransANode(JObj.Opt(JEP_Param4),Ident+1);
+  Result:=Result+#13#10+IdentLen(Ident+1)+'''JE::INC Part'#13#10;
+  Result:=Result+TransANode(JObj.Opt(JEP_Param3),Ident+1);
+  Result:=Result+#13#10+IdentLen(Ident)+'Loop';
+  Result:=Result+IdentLen(Ident)+#13#10+IdentLen(Ident)+'''JE::FOR End'#13#10;
+(*
+  Z:=JObj.Opt(JEP_Param1);
+  Result:=IdentLen(Ident)+'For '+TransANode(Z,0)+' to '+TransANode(JObj.Opt(JEP_Param2),0);
+  Result:=Result+' '''+TransANode(JObj.Opt(JEP_Param3),0)+#13#10;  { TODO : Calc Step here }
+  SetNextNeedVal(false);
+  Result:=Result+TransANode(JObj.Opt(JEP_Param4),Ident+1);
+  Result:=Result+#13#10+IdentLen(Ident)+'Next';*)
 end;
 
 function TJEBasicParser.TransFOREACH(JObj: TJEBranch; Ident: Integer): String;
@@ -1009,30 +1052,6 @@ begin
   Result:=Result+TransANode(JObj.Opt(JEP_Param4),Ident+1);
   Result:=Result+#13#10+IdentLen(Ident)+'Next';
 end;
-
-function TJEBasicParser.TransFUNCTION(JObj: TJEBranch; Ident: Integer): String;
-var
-  IdStr,mstr:String;
-begin
-  IdStr:=TransANode(JObj.Opt(JEP_Param1),0);
-  RegUserFunc(IdStr);
-  Result:=IdentLen(Ident)+GetPerfixStr(JObj)+' Function '+IdStr;
-  mstr:=Trans_ParamDefs(JObj.Opt(JEDN_Params));
-  if mstr<>'' then
-    Result:=Result+'('+mstr+')';
-  Result:=Result+#13#10;
-  FCurFuncIdStr:=IdStr;  //将 JEV_ResultRep 替换为函数名
-  try
-    SetNextNeedVal(false);
-    mstr:=Trans_BodyDef(JObj.Opt(JEDN_Body),Ident+1);
-  finally
-    FCurFuncIdStr:='';
-  end;
-  if mstr<>'' then
-    Result:=Result+mstr;
-  Result:=Result+#13#10+IdentLen(Ident)+'End Function';
-end;
-
 function TJEBasicParser.TransIF(JObj: TJEBranch; Ident: Integer): String;
 begin
   Result:=StdTransIFEx(JObj,Ident);
@@ -1040,12 +1059,17 @@ end;
 
 function TJEBasicParser.TransIIF(JObj: TJEBranch; Ident: Integer): String;
 begin
-  Result:=StdTransIFEx(JObj,Ident);
+  Result:=StdTransIFEx(JObj,Ident,true);
 end;
 
 function TJEBasicParser.TransINC(JObj: TJEBranch; Ident: Integer): String;
+var
+  Z:TJENode;
+  mstr:String;
 begin
-
+  Z:=JObj.Opt(JEP_Param1);
+  mstr:=TransANode(Z,0);
+  Result:=IdentLen(Ident)+mstr+' = '+mstr+' + 1';
 end;
 
 function TJEBasicParser.TransINCLUDE(JObj: TJEBranch; Ident: Integer): String;
@@ -1086,22 +1110,6 @@ end;
 function TJEBasicParser.TransPRED(JObj: TJEBranch; Ident: Integer): String;
 begin
 
-end;
-
-function TJEBasicParser.TransPROCEDURE(JObj: TJEBranch; Ident: Integer): String;
-var
-  mstr:String;
-begin
-  Result:=IdentLen(Ident)+GetPerfixStr(JObj)+' Sub '+TransANode(JObj.Opt(JEP_Param1),0);
-  mstr:=Trans_ParamDefs(JObj.Opt(JEDN_Params));
-  if mstr<>'' then
-    Result:=Result+'('+mstr+')';
-  Result:=Result+#13#10;
-  SetNextNeedVal(false);
-  mstr:=Trans_BodyDef(JObj.Opt(JEDN_Body),Ident+1);
-  if mstr<>'' then
-    Result:=Result+mstr;
-  Result:=Result+#13#10+IdentLen(Ident)+'End Sub';
 end;
 
 function TJEBasicParser.TransREPEAT(JObj: TJEBranch; Ident: Integer): String;
@@ -1163,7 +1171,7 @@ begin
   Z:=JObj.Opt(JEP_Param1);
   Result:=IdentLen(Ident)+'While '+TransANode(Z,0)+#13#10;
   SetNextNeedVal(false);
-  Result:=Result+TransANode(JObj.Opt(JEP_Param2),Ident);
+  Result:=Result+TransANode(JObj.Opt(JEP_Param2),Ident+1);
   Result:=Result+#13#10+IdentLen(Ident)+'Wend';
 end;
 
@@ -1176,6 +1184,18 @@ begin
   SetNextNeedVal(false);
   Result:=Result+TransANode(JObj.Opt(JEP_Param2),Ident+1);
   Result:=Result+#13#10+IdentLen(Ident)+'Loop';
+end;
+
+function TJEBasicParser.Trans_BodyDef(JObj: TJENode; Ident: Integer;
+  const ObjName: String): String;
+begin
+  FCurFuncIdStr:=ObjName;  //将 JEV_ResultRep 替换为函数名
+  try
+    SetNextNeedVal(false);
+    Result:=inherited Trans_BodyDef(JObj,Ident,ObjName);
+  finally
+    FCurFuncIdStr:='';
+  end;
 end;
 
 function TJEBasicParser.VarForLan(const VarName: String): String;
@@ -1242,11 +1262,11 @@ begin
   begin
     mstr:=NextTo('<%',true,true);
     if mstr<>'' then
-      PushHTMLStr(mstr);
+      PushRawText(mstr);
   end;
 end;
 
-function TJEBasicParser.GetLineCommetOps: TStrings;
+function TJEBasicParser.GetLineCommentOps: TStrings;
 begin
   Result:=TStringList.Create;
   Result.Add('''');
@@ -1347,6 +1367,7 @@ begin
   FArrayUseFuncBracket:=true;
   FAddAsStrJoin:=true;
   FFuncNameAsResult:=true;
+  FSessionVarName:='SESSION';
   BASKW_AS:=RegKeyword('AS');
   BASKW_BYREF:=RegKeyword('BYREF');
   BASKW_BYVAL:=RegKeyword('BYVAL');
@@ -1439,7 +1460,7 @@ end;
 
 function TJEBasicParser.OnSpecialHeadChar(ACh: Char; APos: Integer): Boolean;
 var
-  n:Integer;
+  n,spos:Integer;
   mstr:String;
 begin
   Result:=false;
@@ -1503,13 +1524,17 @@ begin
       FInEchoExpr:=false;
     end;
     FCurPos:=APos+1;
-    mstr:=NextTo('<%',true,true);  //退回到 <% 符号之前，以便解析 <%=
+    spos:=FCurPos;
+    mstr:=NextTo(JBasic_RawEnd,true,true);  //退回到 <% 符号之前，以便解析 <%=
+    SetCurToken(mstr,tkRawText,spos);
+    {
     //if mstr<>'' then
       PushHTMLStr(mstr);
     if FCurPos>n then
       SetCurToken('',tkEND,FCurPos)
     else
-      SetCurToken(':',tkLINEDIV,FCurPos);
+      SetCurToken('',tkLINEDIV,FCurPos);
+      //SetCurToken(JBasic_RawEnd,tkRawEnd,FCurPos);}
     Result:=true;
   end;
 end;
@@ -1595,35 +1620,42 @@ begin
   ExpectKW;
   while CurToken.Kind<>tkEND do
   begin
-    idx:=CurToken.KWIdx1-1;
-    if idx=BASKW_END then exit;
-    mstr:='PUBLIC';  //Default visibility
-    if idx=BASKW_DIM then
-      lv:=Parse_Vars(mstr,true)
-    else if idx=BASKW_SUB then
-      lv:=Parse_Sub(mstr,true)
-    else if idx=BASKW_FUNCTION then
-      lv:=Parse_Func(mstr,true)
-    else if (idx=BASKW_PUBLIC) or (idx=BASKW_PRIVATE) then
+    if CurToken.Kind=tkComment then
     begin
-      if idx=BASKW_PRIVATE then mstr:='PRIVATE';
-      idx2:=NextTokenKW;
-      if idx2=BASKW_DIM then
-        lv:=Parse_Vars(mstr,true)
-      else if idx2=BASKW_SUB then
-        lv:=Parse_Sub(mstr,true)
-      else if idx2=BASKW_FUNCTION then
-        lv:=Parse_Func(mstr,true)
-      else if idx2<0 then
-        lv:=Parse_Vars(mstr,false)
-      else
-        PrintErr('SUB, FUNCTION or identifier expected.');
+      PushCommentToken(false);
+      NextToken;
     end
     else begin
-      PrintErr('Member define expected.');
-      NextToken;
+      idx:=CurToken.KWIdx1-1;
+      if idx=BASKW_END then exit;
+      mstr:='PUBLIC';  //Default visibility
+      if idx=BASKW_DIM then
+        lv:=Parse_Vars(mstr,true)
+      else if idx=BASKW_SUB then
+        lv:=Parse_Sub(mstr,true)
+      else if idx=BASKW_FUNCTION then
+        lv:=Parse_Func(mstr,true)
+      else if (idx=BASKW_PUBLIC) or (idx=BASKW_PRIVATE) then
+      begin
+        if idx=BASKW_PRIVATE then mstr:='PRIVATE';
+        idx2:=NextTokenKW;
+        if idx2=BASKW_DIM then
+          lv:=Parse_Vars(mstr,true)
+        else if idx2=BASKW_SUB then
+          lv:=Parse_Sub(mstr,true)
+        else if idx2=BASKW_FUNCTION then
+          lv:=Parse_Func(mstr,true)
+        else if idx2<0 then
+          lv:=Parse_Vars(mstr,false)
+        else
+          PrintErr('SUB, FUNCTION or identifier expected.');
+      end
+      else begin
+        PrintErr('Member define expected.');
+        NextToken;
+      end;
+      if Result<0 then Result:=lv;
     end;
-    if Result<0 then Result:=lv;    
     while (CurToken.Kind in [tkEOLN,tkLINEDIV]) do
       NextToken;
     ExpectKW;
@@ -1678,7 +1710,7 @@ Loop [{While | Until} condition]
     idx2:=-1;
   end;
   if idx2>=0 then
-    if ParseStatements(true)<0 then
+    if ParseExpr<0 {ParseStatements(true)<0} then
     begin
       PrintErr('Expect expression here.');
       PushBool(true);
@@ -1703,7 +1735,7 @@ Loop [{While | Until} condition]
     end
     else
       PrintErr('Expect "WHILE" or "UNTIL" here.');
-    if ParseStatements(true)<0 then
+    if ParseExpr<0 {ParseStatements(true)<0} then
     begin
       PrintErr('Expect expression here.');
       PushBool(true);
@@ -1929,7 +1961,8 @@ end;
 
 function TJEBasicParser.ParseIf;
 var
-  OneLine:Boolean;
+  OneLine,LvChange,ElseOrEnd:Boolean;
+  idx:Integer;
 begin
   // if ... then
   //   ...
@@ -1942,6 +1975,7 @@ begin
   Result:=FCurNodeLevel;
   NextToken;
   ParseExpr;
+  LvChange:=false;
   if CurToken.KWIdx1=0 then
   begin
     PrintErr('Expect "THEN" here.');
@@ -1958,15 +1992,24 @@ begin
   begin
     GoNextStatementParam;
     NextToken;
-    if CurToken.Kind in [tkEOLN,tkLINEDIV] then
+    if CurToken.Kind in [tkEOLN,tkLINEDIV,tkRawText] then
     begin
       OneLine:=false;
-      NextToken;
+      if CurToken.Kind<>tkRawText then  //2012-12-23
+        NextToken;
     end
     else
       OneLine:=true;
   end;
-  TryParseStatements(OneLine);
+  if LvChange then
+  begin
+    idx:=ExpectKW-1;
+    ElseOrEnd:=(idx=BASKW_ELSEIF) or (idx=BASKW_ELSE) or(idx=BASKW_END);
+  end
+  else
+    ElseOrEnd:=false;
+  if not ElseOrEnd then
+    TryParseStatements(OneLine);
   ExpectKW;
   if CurToken.KWIdx1=BASKW_ELSEIF+1 then
   begin
@@ -2057,7 +2100,12 @@ begin
         NextToken;
       Dec(FCurBlockCount);
     end;
-    if not (CurToken.Kind in [tkEOLN,tkLINEDIV]) then 
+    if CurToken.Kind=tkComment then
+    begin
+      PushCommentToken(false);
+      NextToken;
+    end;
+    if not (CurToken.Kind in [tkEOLN,tkLINEDIV]) then
     begin
       PrintErr('Expect EOLN here.');
       while not (CurToken.Kind in [tkEOLN,tkLINEDIV,tkEND]) do
@@ -2417,7 +2465,7 @@ begin
   StatementWithDefEnd;
 end;
 
-procedure TJEBasicParser.PushHTMLStr(const Text: String; AddLnBreak: Boolean);
+procedure TJEBasicParser.PushRawText(const Text: String; AddLnBreak: Boolean);
 var
   str1,str2,mstr:String;
   i,n0,n1,p1,p2,pc,TxtLen:Integer;

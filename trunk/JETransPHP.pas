@@ -22,7 +22,7 @@ type
     function GetStrChCharSet:TJECharSet; override;
     function GetMathOpCharSet:TJECharSet; override;
     function GetSpecialCharSet:TJECharSet; override;
-    function GetLineCommetOps:TStrings; override;
+    function GetLineCommentOps:TStrings; override;
     function GetOpInfo(var Op: String; out IsOp2: Boolean; out Rank: Byte):Boolean; override;
     function GetOpRank(const Op: String):Byte; override;
     function GetSetValOpRank:Byte; override;
@@ -56,7 +56,7 @@ type
     function Parse_Vars(const PerfixStr: String; NeedNext: Boolean):Integer;
     function Parse_Sub(const PerfixStr: String; NeedNext: Boolean):Integer;
     function Parse_Func(const PerfixStr: String; NeedNext: Boolean):Integer;
-    procedure AddConst(const AName: String);
+    procedure AddConst(const AName: String); override;
     procedure BeforeTransTree; override;
     function GetLanOp(const StdOp: String): String; override;
     function SetValOp:String; override;
@@ -66,7 +66,8 @@ type
     function GetJETreePerfix:String; override;
     function GetJETreePostfix:String; override;
     function GetPerfixStr(JObj: TJEBranch):String; override;
-    function TransLanStatmentFunc(JObj: TJEBranch; const Lan, Op: String; Ident: Integer):String; override;
+    function TransLanStatmentFunc(JObj: TJEBranch; const Lan, Op: String;
+      Ident: Integer):String; override;
     function TransOtherLanBuildInFunc(JObj: TJEBranch; const Op, ALan: String;
       Ident: Integer):String; override;
     function TransTypeVal(const ValStr: String; Ident: Integer):String; override;
@@ -93,17 +94,18 @@ type
     function TransWHILE(JObj: TJEBranch; Ident: Integer):String; override;
     function TransWHILENOT(JObj: TJEBranch; Ident: Integer):String; override;
     function TransREPEAT(JObj: TJEBranch; Ident: Integer):String; override;
-    function TransPROCEDURE(JObj: TJEBranch; Ident: Integer):String; override;
-    function TransFUNCTION(JObj: TJEBranch; Ident: Integer):String; override;
     function TransVAR(JObj: TJEBranch; Ident: Integer):String; override;
-    function TransVAR1(JObj: TJENode; Ident: Integer; InClass, HasPerfix: Boolean):String; 
+    function TransVAR1(JObj: TJENode; Ident: Integer; InClass, HasPerfix: Boolean):String;
     function TransCONST(JObj: TJEBranch; Ident: Integer):String; override;
-    function TransCONST1(JObj: TJEBranch; Ident: Integer):String; 
+    function TransCONST1(JObj: TJEBranch; Ident: Integer):String;
     function TransCLASS(JObj: TJEBranch; Ident: Integer):String; override;
+    function GetIdentStr(JObj: TJENode):String; override;
     function StdMakeBlock(const Str, IdentStr:String; NoHeadIdent: Boolean):String; override;
     function StdMakeIfThen(const Expr, IdentStr: String):String; override;
     function StdMakeElseIf(const Expr, IdentStr: String):String; override;
     function StdMakeElseEnd(IsElse: Boolean; const IdentStr: String):String; override;
+    function StdMakeFuncBody(const FuncBody, IdentStr: String;
+      IsProc: Boolean):String; override;
     function GetArrayDefStr(ANode: TJEBranch; CurDimIdx: Integer=1):String; override;
     class function GetFilePostfixs: TStrings; override;
   public
@@ -190,6 +192,7 @@ const
   //JPHP_SHR='SHR';
   //JPHP_SHL='SHL';
   JPHP_SetValue='=';
+  PHPAlpha_Number=['0'..'9','A'..'Z','a'..'z','_','$'];
 
 var
   SingleOpMap:array [Char] of String;
@@ -290,7 +293,7 @@ begin
   Dec(r,20);
   OpRank['&']:=r; Dec(r,10);
   OpRank['^']:=r; Dec(r,10);
-  OpRank['!']:=r; Dec(r,10);
+  OpRank['|']:=r; Dec(r,10);
   OpRanks.AddObject('&&',TObject(r)); OpRanks.AddObject('||',TObject(r)); Dec(r,10);
   OpRank['?']:=r; Dec(r,20);
   OpRank['=']:=r; Dec(r,10);
@@ -440,6 +443,16 @@ begin
   Result.Add('php');
 end;
 
+function TJEPHPParser.GetIdentStr(JObj: TJENode): String;
+begin
+  FInDefId:=true;  //避免给标识符加上 $ 前缀...
+  try
+    Result:=TransANode(JObj,0);
+  finally
+    FInDefId:=false;
+  end;
+end;
+
 function TJEPHPParser.GetJETreePerfix: String;
 begin
   Result:='<?php'#13#10
@@ -521,7 +534,7 @@ end;
 function TJEPHPParser.PackSrc(const Source: String; out WordCount: Integer): String;
 var
   mstr:String;
-  i,Len,n,Status:Integer;
+  i,i0,Len,n,n2,Status:Integer;
   LastNone:Boolean;
 begin
   WordCount:=0;
@@ -541,6 +554,7 @@ begin
             Inc(i);
             if Source[i]='*' then
             begin
+              if Keep_Comment then i0:=i;     
               repeat
                 Inc(i);
               until Source[i-1]='*';
@@ -549,10 +563,17 @@ begin
             end
             else if Source[i]='/' then
             begin
+              if Keep_Comment then i0:=i;
               repeat
                 Inc(i);
                 if i>Len then exit;                
               until Source[i-1]<' ';
+              if Keep_Comment then
+              begin
+                n2:=i-i0;
+                Move(Source[i0-1],mstr[n+1],n2);
+                Inc(n,n2);
+              end;
               continue;
             end;
             continue;
@@ -595,7 +616,7 @@ begin
     case Status of
       0:
         begin
-          if Source[i] in Alpha_Number then
+          if Source[i] in PHPAlpha_Number then
           begin
             if LastNone then
             begin
@@ -617,7 +638,7 @@ begin
         end;
       1:
         begin
-          if Source[i] in Alpha_Number then
+          if Source[i] in PHPAlpha_Number then
           begin
             Inc(WordCount);
             Inc(n);
@@ -708,6 +729,12 @@ end;
 function TJEPHPParser.StdMakeElseIf(const Expr, IdentStr: String): String;
 begin
   Result:=#13#10+IdentStr+'elseif('+Expr+')'#13#10;
+end;
+
+function TJEPHPParser.StdMakeFuncBody(const FuncBody, IdentStr: String;
+  IsProc: Boolean): String;
+begin
+  Result:=StdMakeBlock(FuncBody,IdentStr,false);
 end;
 
 function TJEPHPParser.StdMakeIfThen(const Expr, IdentStr: String): String;
@@ -803,7 +830,7 @@ begin
   case Length(Op) of
     1:
     begin
-      if Op[1] in ['\','.','&','|','^','!'] then
+      if Op[1] in ['\','.','&','|','^'] then
       begin
         if Op[1]='\' then
         begin
@@ -1022,37 +1049,6 @@ begin
   Result:=Result+#13#10+IdentLen(Ident)+'}';
 end;
 
-function TJEPHPParser.TransFUNCTION(JObj: TJEBranch; Ident: Integer): String;
-var
-  mstr,IdentStr,IdStr:String;
-begin
-  IdentStr:=IdentLen(Ident);
-  FInDefId:=true;  //避免给标识符加上 $ 前缀...
-  try
-    IdStr:=TransANode(JObj.Opt(JEP_Param1),0);
-  finally
-    FInDefId:=false;
-  end;
-  Result:=IdentStr;
-  if GetClassLevelNode<>nil then  //只有class内部允许有可见性修饰符
-    Result:=Result+GetPerfixStr(JObj)+' ';
-  Result:=Result+'function '+IdStr;
-  mstr:=Trans_ParamDefs(JObj.Opt(JEDN_Params));
-  //if mstr<>'' then  //2012-05-29  PHP的函数必须带()
-  Result:=Result+'('+mstr+')';
-  Result:=Result+#13#10+IdentStr+'{'#13#10;
-  SetNextNeedVal(false);
-  mstr:=Trans_BodyDef(JObj.Opt(JEDN_Body),Ident+1);
-  if mstr<>'' then
-    Result:=Result+mstr;
-  //如有必要，在函数的最后加上return返回值的语句
-  if TreeBaseLanClass.HasResultVar then
-  begin
-    Result:=Result+#13#10+IdentLen(Ident+1)+MakeReturn(VarForLan(JEV_ResultRep));
-  end;
-  Result:=Result+#13#10+IdentStr+'}';
-end;
-
 function TJEPHPParser.TransIF(JObj: TJEBranch; Ident: Integer): String;
 begin
   Result:=StdTransIFEx(JObj,Ident);
@@ -1060,7 +1056,7 @@ end;
 
 function TJEPHPParser.TransIIF(JObj: TJEBranch; Ident: Integer): String;
 begin
-  Result:=StdTransIFEx(JObj,Ident);
+  Result:=StdTransIFEx(JObj,Ident,true);
 end;
 
 function TJEPHPParser.TransINC(JObj: TJEBranch; Ident: Integer): String;
@@ -1230,32 +1226,6 @@ begin
 
 end;
 
-function TJEPHPParser.TransPROCEDURE(JObj: TJEBranch; Ident: Integer): String;
-var
-  mstr,IdentStr,IdStr:String;
-begin
-  IdentStr:=IdentLen(Ident);
-  FInDefId:=true;  //避免给标识符加上 $ 前缀...
-  try
-    IdStr:=TransANode(JObj.Opt(JEP_Param1),0);
-  finally
-    FInDefId:=false;
-  end;
-  Result:=IdentStr;
-  if GetClassLevelNode(false)<>nil then  //只有class内部允许有可见性修饰符
-    Result:=Result+GetPerfixStr(JObj)+' ';
-  Result:=Result+'function '+IdStr;
-  mstr:=Trans_ParamDefs(JObj.Opt(JEDN_Params));
-  //if mstr<>'' then
-    Result:=Result+'('+mstr+')';
-  Result:=Result+'{'#13#10;
-  SetNextNeedVal(false);
-  mstr:=Trans_BodyDef(JObj.Opt(JEDN_Body),Ident+1);
-  if mstr<>'' then
-    Result:=Result+mstr;
-  Result:=Result+#13#10+IdentLen(Ident)+'}';
-end;
-
 function TJEPHPParser.TransREPEAT(JObj: TJEBranch; Ident: Integer): String;
 var
   Z:TJENode;
@@ -1377,7 +1347,7 @@ begin
   Z:=JObj.Opt(JEP_Param1);
   Result:=IdentStr+'while('+TransANode(Z,0)+'){'#13#10;
   SetNextNeedVal(false);
-  Result:=Result+TransANode(JObj.Opt(JEP_Param2),Ident);
+  Result:=Result+TransANode(JObj.Opt(JEP_Param2),Ident+1);
   Result:=Result+#13#10+IdentStr+'}';
 end;
 
@@ -1394,10 +1364,14 @@ end;
 
 function TJEPHPParser.VarForLan(const VarName: String): String;
 begin
+  if Use_Session and (VarName=JEP_Session) then
+  begin
+    Result:='$'+FSessionVarName;
+    exit;
+  end;
+  Result:=VarName;
   if (FConsts.IndexOf(VarName)<0) and not FInDefId then
-    Result:='$'+VarName
-  else
-    Result:=VarName;
+    Result:='$'+VarName;
 end;
 
 { TJEPHPParser }
@@ -1421,10 +1395,10 @@ begin
   end;
 end;
 
-function TJEPHPParser.GetLineCommetOps: TStrings;
+function TJEPHPParser.GetLineCommentOps: TStrings;
 begin
   Result:=TStringList.Create;
-  Result.Add('''');
+  Result.Add('//');
 end;
 
 function TJEPHPParser.GetMathOpCharSet: TJECharSet;
@@ -1486,6 +1460,7 @@ begin
   FNotEqualOp:='<>';
   FStrCh:=['"',''''];
   FPascalTypeStr:=true;
+  FSessionVarName:='_SESSION';
   PHPKW_AS:=RegKeyword('AS');
   PHPKW_CASE:=RegKeyword('PHPKW_CASE');
   PHPKW_CLASS:=RegHeadKeywordMethod('CLASS',ParseClass);

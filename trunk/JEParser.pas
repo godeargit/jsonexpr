@@ -10,6 +10,7 @@ type
     tkSPACE,
     tkEOLN,
     tkLINEDIV,
+    tkEmptyBreak,
     tkSTRING,
     tkNUMERIC,
     tkOPERATOR,
@@ -23,6 +24,9 @@ type
     tkTYPE,
     tkOBJ,
     tkCOMMENT,
+    tkRawText,   // %>......<%
+    //tkRawEnd,    // <%
+    //tkRawBegin,  // %>
     tkStart,
     tkEND
   );
@@ -185,17 +189,22 @@ const
 type
   TExtractOption=(eoIncObj, eoIncObjMember);
   TExtractOptions=set of TExtractOption;
-  TJEParserClass=class of TJEParser;
   TNodeData=record
     Node: TJENode;
     Op: String;
     NeedVal: Boolean;
     NoLeftOutput: Boolean; //当右部完成利用LeftStr后，左部不必再使用
-    LeftStr,               //用于赋值左部的嵌入  X:=IF(A>0,B,C) => IF A>0 THEN X:=B ELSE X:=C
-    PerfixStr,             //用于表达式中条件转移的提前实现  XXX := YY + IF(...);
+    LeftStr,               //用于赋值左部的嵌入  X:=IIF(A>0,B,C) => IF A>0 THEN X:=B ELSE X:=C
+    PerfixStr,             //用于表达式中条件转移的提前实现  XXX := YY + IIF(...);
     PostfixStr: String;
   end;
   PNodeData=^TNodeData;
+  //注释类型——行、块、编译指示、文档
+  TCommentKind=(cmtLine,cmtBlock,cmtDirective,cmtDoc);
+const
+  CommentKinds:array [TCommentKind] of Char=('L','B','T','D');
+type
+  TJEParserClass=class of TJEParser;
   TJEParser=class
   private
     procedure SetSource(const Value: String);
@@ -211,12 +220,12 @@ type
     FBrackets:TJECharSet;
     FMathOps:TJECharSet;
     FCompOps:TJECharSet;
-    FCommetHC:TJECharSet;   //注释符号的前导字符
+    FCommentHC:TJECharSet;   //注释符号的前导字符
     FSpecialHCs:TJECharSet; //可能需要进行特殊处理的前导字符  如Basic的 &H ，C的 0x 等
     FMathStrs:TStrings;
     FCompStrs:TStrings;
-    FLineCommet:TStrings;
-    FBlockCommet:TStrings;  //Name=Value  Start with name, end with value.
+    FLineComment:TStrings;
+    FBlockComment:TStrings;  //Name=Value  Start with name, end with value.
     FKeywords, FHeadKeywords, FLanFuncs, FLanObjs, FLanVals,
     FLanTypes, FLanOp2s, FLanOp1s, FPerfixKWs, FPostfixKWs: TStringList;
     FLanWordsAy: array of TStringList;
@@ -240,6 +249,7 @@ type
     FDefLevels: TStrings;  //Strings:类型  Objects:Level
     FCurNodeLevel, FCurBlockCount, FStatementLevel: Integer;
     FFuncWithoutBracket: Boolean;
+    FSessionVarName: String;
     FUserSymbols: TStringList;
     function RegKeyword(const AWord: String; KWTag: TKeywordTags=[]):Integer;
     { 无返回值的头关键字 }
@@ -268,10 +278,12 @@ type
     function GetSpecialCharSet:TJECharSet; virtual;
     function GetMathStrs:TStrings; virtual;
     function GetCompStrs:TStrings; virtual;
-    function GetLineCommetOps:TStrings; virtual;
-    function GetBlockCommetStrs:TStrings; virtual;
+    function GetLineCommentOps:TStrings; virtual;
+    function GetBlockCommentStrs:TStrings; virtual;
     function DefaultVisibility:String; virtual;
     procedure SetCurToken(const AStr: String; AKind: TTokenKind; APos: Integer);
+    procedure SetCommentToken(const AStr: String; AKind: TCommentKind; APos: Integer;
+      AfterLineBreak: Boolean);
     function CheckFuncNoBracket(var ExprLv: Integer):Boolean;
     function CurExprIsArray:Boolean; virtual;
     function CurExprIsNotFunc:Boolean;
@@ -291,6 +303,7 @@ type
     procedure PushOp1(const AOp: String; ARank: Byte); overload; //单目运算符
     procedure PushBracket(const AOp: String);
     procedure PushBracketOp(const Op: String);
+    procedure PushRawText(const Text: String; AddLineBreak: Boolean); virtual;
     procedure PushNull;
     procedure PushBool(const B: Boolean);
     procedure PushFunc(const AName: String; IsStatement: Boolean=false);
@@ -300,10 +313,14 @@ type
     procedure PushEmptyItem;
     procedure StatementBegin;
     procedure PushLineBreakOp;
+    procedure PushSpaceBreakOp;
     procedure PushSetValOp;
     procedure PushDefine(const TypeStr: String);
     procedure PopupDefine;
     procedure PushPerfix(const S: String; Lv: Integer=-1);
+    procedure PushComment(const S: String; Kind: TCommentKind; AddLineDiv: Boolean=true;
+      AfterLineBreak:Boolean=true);
+    procedure PushCommentToken(AddLineDiv: Boolean=true);
     { 形成一个 Var := Var + IncVal 的增量算式 }
     procedure MakeVarInc(AVar, IncVal: TJENode);
     procedure MakeVarInc1(AVar: TJENode);
@@ -375,6 +392,7 @@ type
     function IsExprOp(const OpStr: String; AfterCastToStd: Boolean=true):Boolean; virtual;
     { 对于只有一个标识符的语句，将其转化为方法调用，而不是任其以变量的形式存在 }
     procedure TryTransOneWordStatement;
+    function LnBreakBeforeRawText:Boolean; virtual;
   private
     FIdent: String;
     FTreeBaseLan: String;
@@ -384,6 +402,8 @@ type
     FTmpVarNum: Integer;
     FNextNeedValue: Boolean;
     FRootNeedValue: Boolean;
+    FIgnorePervLineDiv: Boolean;
+    FIgnorePostLineDiv: Boolean;
     procedure SetIdent(const Value: String);
     function GetIdent: String;
     procedure SetRootNeedValue(const Value: Boolean);
@@ -418,6 +438,7 @@ type
     procedure Combine_SubBeforeAfter(var Str: String; Ident: Integer=0);
     procedure Clear_BeforeAfter;
     procedure InitNodeAy;
+    procedure AddConst(const AName: String); virtual;
     procedure BeforeTransTree; virtual;
     function GetParentLeftExpr(out LStr, VarName: String):PNodeData;
     function GetLanOp(const StdOp: String): String; virtual;
@@ -434,6 +455,7 @@ type
     function GetJETreePerfix:String; virtual;
     function GetJETreePostfix:String; virtual;
     function GetPerfixStr(JObj: TJEBranch):String; virtual;
+    function GetDocRemHead:String; virtual;
     function TransLanStatmentFunc(JObj: TJEBranch; const Lan, Op: String;
       Ident: Integer):String; virtual;
     function TransBuildInFunc(JObj: TJEBranch; const Op: String; Ident: Integer):String; virtual;
@@ -467,19 +489,27 @@ type
     function TransRETURN(JObj: TJEBranch; Ident: Integer):String; virtual;
     function TransTIMES(JObj: TJEBranch; Ident: Integer):String; virtual;
     function TransISNULL(JObj: TJEBranch; Ident: Integer):String; virtual;
+    function TransComment(JObj: TJEBranch; Ident: Integer; Kind: TCommentKind):String; virtual;
     function TransPROCEDURE(JObj: TJEBranch; Ident: Integer):String; virtual;
     function TransFUNCTION(JObj: TJEBranch; Ident: Integer):String; virtual;
     function TransCLASS(JObj: TJEBranch; Ident: Integer):String; virtual;
     function TransVAR(JObj: TJEBranch; Ident: Integer):String; virtual;
     function TransCONST(JObj: TJEBranch; Ident: Integer):String; virtual;
     function Trans_OneParamDef(JObj: TJENode):String; virtual;
-    function Trans_BodyDef(JObj: TJENode; Ident: Integer):String; virtual;
+    function Trans_BodyDef(JObj: TJENode; Ident: Integer; const ObjName: String):String; virtual;
+    function GetIdentStr(JObj: TJENode):String; virtual;
+    function GetFuncTypeStr(JObj: TJENode):String;
     function StdMakeBlock(const Str, IdentStr:String; NoHeadIdent: Boolean):String; virtual;
     function StdMakeSetVal(const VarStr, ExprStr: String):String; virtual;
     function StdMakeIfThen(const Expr, IdentStr: String):String; virtual;
     function StdMakeElseIf(const Expr, IdentStr: String):String; virtual;
     function StdMakeElseEnd(IsElse: Boolean; const IdentStr: String):String; virtual;
-    function StdTransIFEx(JObj: TJEBranch; Ident: Integer):String;
+    function StdMakeFuncHead(const FuncName, Perfix, ParamStr, TypeStr, IdentStr: String;
+      IsProc: Boolean):String; virtual;
+    function StdMakeFuncBody(const FuncBody, IdentStr: String;
+      IsProc: Boolean):String; virtual;
+    function StdTransIFEx(JObj: TJEBranch; Ident: Integer; NeedVal: Boolean=false):String;
+    function StdTransFuncEx(JObj: TJEBranch; Ident: Integer; IsProc: Boolean):String;
     function MakeReturn(const ValExpr: String):String; virtual;
     { 获取一维或多维数组的定义文本 如 ay(2,1)  array [0..2,0..1] of Variant }
     function GetArrayDefStr(ANode: TJEBranch; CurDimIdx: Integer=1):String; virtual;
@@ -559,6 +589,7 @@ type
     procedure TransPostfixInStr(var Text: String; OriLanClass: TJEParserClass;
       DestPostfix: String='');
     function PackSrc(const Source: String; out WordCount: Integer):String; virtual;
+    function NameEqual(const NameA, NameB: String):Boolean;
     constructor Create; virtual;
     destructor Destroy; override;
   end;
@@ -567,6 +598,7 @@ const
   Alpha_Number=['0'..'9','A'..'Z','a'..'z','_'];
 var
   ErrPrint:TPrintFunc;
+  Use_Session:Boolean=true;   //2013-03-29
 
 function DblQuotedStr(const S: String): String;
 function FastPos(const aSourceString,aFindString:String;const aSourceLen,aFindLen,StartPos:Integer):Integer;
@@ -874,6 +906,11 @@ begin
     Result:=Str;
 end;
 
+procedure TJEParser.AddConst(const AName: String);
+begin
+
+end;
+
 function TJEParser.AddIdent(const Text: String; Ident: Integer): String;
 begin
   Result:=IdentLen(Ident)+StringReplace(Text,#13#10,#13#10+IdentLen(Ident),[rfReplaceAll]);
@@ -1099,12 +1136,31 @@ begin
   end;
 end;
 
+function TJEParser.GetDocRemHead: String;
+begin
+  if FLineComment.Count>0 then
+    Result:=FLineComment[0]
+  else begin
+    Result:=JEH_DocRem;
+    exit;
+  end;
+  if Result<>'' then
+    Result:=Result+Copy(FLineComment[0],1,1)
+  else
+    Result:=JEH_DocRem;
+end;
+
 function TJEParser.GetIdent: String;
 begin
   if FIdent='' then
     Result:=DefaultIdent
   else
     Result:=FIdent;
+end;
+
+function TJEParser.GetIdentStr(JObj: TJENode): String;
+begin
+  Result:=TransANode(JObj,0);
 end;
 
 function TJEParser.GetJETreePerfix: String;
@@ -1341,6 +1397,11 @@ begin
   Result:=';';
 end;
 
+function TJEParser.LnBreakBeforeRawText: Boolean;
+begin
+  Result:=true;
+end;
+
 function TJEParser.Node2Str(Z: TJENode; IsCommonFunc: Boolean;
   OpRank, PrnRank: Integer; Ident: Integer): String;
 var
@@ -1453,7 +1514,8 @@ end;
 
 function TJEParser.PackSrc(const Source: String; out WordCount: Integer): String;
 begin
-
+  Result:=Source;
+  WordCount:=0;
 end;
 
 function TJEParser.ParamDefDiv: String;
@@ -1515,6 +1577,22 @@ begin
   end;
 end;
 
+procedure TJEParser.SetCommentToken(const AStr: String; AKind: TCommentKind; APos: Integer;
+  AfterLineBreak: Boolean);
+begin
+  FLastToken:=FCurToken;
+  with FCurToken do
+  begin
+    Token:=AStr;
+    CaseOKToken:=CommentKinds[AKind];  //使用CaseOKToken存放具体类型
+    if not AfterLineBreak then         //不在新行的注释
+      CaseOKToken:=CaseOKToken+'_';
+    StartPos:=APos;
+    Kind:=tkComment;
+    KWIdx1:=0;
+  end;
+end;
+
 procedure TJEParser.SetCurLeftStr(const Str: String);
 begin
   if FCurNodeIdx<0 then exit;
@@ -1525,6 +1603,22 @@ procedure TJEParser.SetCurNeedVal(B: Boolean);
 begin
   if FCurNodeIdx<0 then exit;
   FNodeAy[FCurNodeIdx].NeedVal:=B;
+end;
+
+procedure TJEParser.SetCurToken(const AStr: String; AKind: TTokenKind; APos: Integer);
+begin
+  FLastToken:=FCurToken;
+  with FCurToken do
+  begin
+    Token:=AStr;
+    if (AKind=tkWORD) and FWordNoCase then
+      CaseOKToken:=UpperCase(Token)
+    else
+      CaseOKToken:=Token;
+    StartPos:=APos;
+    Kind:=AKind;
+    KWIdx1:=0;
+  end;
 end;
 
 procedure TJEParser.SetIdent(const Value: String);
@@ -1561,7 +1655,7 @@ begin
   with FNodeAy[Idx] do
   begin
     if PostfixStr<>'' then
-      PostfixStr:=PostfixStr+';'#13#10+Str
+      PostfixStr:=PostfixStr+LineDivStr+Str
     else
       PostfixStr:=Str;
   end;
@@ -1575,7 +1669,7 @@ begin
   with FNodeAy[Idx] do
   begin
     if PerfixStr<>'' then
-      PerfixStr:=PerfixStr+';'#13#10+Str
+      PerfixStr:=PerfixStr+LineDivStr+Str
     else
       PerfixStr:=Str;
   end;
@@ -1628,6 +1722,27 @@ begin
   Result:=IdentStr+'elseif';
 end;
 
+function TJEParser.StdMakeFuncBody(const FuncBody, IdentStr: String;
+  IsProc: Boolean): String;
+begin
+  Result:=IdentStr+'('#13#10+FuncBody;
+  if Copy(Result,Length(Result)-1,2)<>#13#10 then
+    Result:=Result+#13#10;
+  Result:=Result+IdentStr+');'#13#10;
+end;
+
+function TJEParser.StdMakeFuncHead(const FuncName, Perfix, ParamStr,
+  TypeStr, IdentStr: String; IsProc: Boolean): String;
+begin
+  Result:=IdentStr;
+  if Perfix<>'' then
+    Result:=Result+' '+Perfix+' ';
+  Result:=Result+'function '+FuncName;
+  Result:=Result+'('+ParamStr+')';
+  if TypeStr<>'' then
+    Result:=Result+':'+TypeStr;
+end;
+
 function TJEParser.StdMakeIfThen(const Expr, IdentStr: String): String;
 begin
   Result:=IdentStr+'if '+Expr+' then';
@@ -1635,10 +1750,32 @@ end;
 
 function TJEParser.StdMakeSetVal(const VarStr, ExprStr: String): String;
 begin
-  Result:=VarStr+SetValOp+ExprStr+LineEndStr;
+  Result:=VarStr+SetValOp+ExprStr; //2012-12-04  remove LineEndStr
 end;
 
-function TJEParser.StdTransIFEx(JObj: TJEBranch; Ident: Integer): String;
+function TJEParser.StdTransFuncEx(JObj: TJEBranch; Ident: Integer;
+  IsProc: Boolean): String;
+var
+  mstr,IdentStr,IdStr,PerfixStr,VarStr,TypeStr:String;
+begin
+  IdentStr:=IdentLen(Ident);
+  IdStr:=GetIdentStr(JObj.Opt(JEP_Param1));
+  if GetClassLevelNode(false)<>nil then  //只有class内部允许有可见性修饰符
+    PerfixStr:=GetPerfixStr(JObj)
+  else
+    PerfixStr:='';
+  mstr:=Trans_ParamDefs(JObj.Opt(JEDN_Params));
+  if IsProc then
+    TypeStr:=''
+  else
+    TypeStr:=GetFuncTypeStr(JObj);
+  Result:=StdMakeFuncHead(IdStr,PerfixStr,mstr,TypeStr,IdentStr,IsProc);
+  SetNextNeedVal(false);
+  mstr:=Trans_BodyDef(JObj.Opt(JEDN_Body),Ident+1,IdStr);
+  Result:=Result+StdMakeFuncBody(mstr,IdentStr,IsProc);
+end;
+
+function TJEParser.StdTransIFEx(JObj: TJEBranch; Ident: Integer; NeedVal: Boolean): String;
 var
   Str0,Str1,LStr,TmpVar,IdentStr:String;
   MyObj:TJENode;
@@ -1649,7 +1786,7 @@ var
   begin
     if Str='' then exit;
     if not (ScanLastNoneBlankCh(Str) in [';','}',#0]) then
-      Str:=Str+';';
+      Str:=Str+LineEndStr;
     if P<>nil then
       Str:=IdentLen(Ident+1)+StdMakeSetVal(LStr,Str);
     Combine_SubBeforeAfter(Str,Ident+1);
@@ -1662,7 +1799,10 @@ begin
   Str0:=TransANode(MyObj,0);
   if Str0='' then Str0:='true';
   Gather_BeforeAfter(Ident);
-  NVal:=NodeNeedVal;
+  if NeedVal then
+    NVal:=NodeNeedVal
+  else
+    NVal:=false;
   //需要IF表达式的返回值  X := IF( ?, A, B )    Y:=IF(?,X+IF(?,1,2),3)+100
   if NVal then
   begin
@@ -1759,7 +1899,15 @@ var
 begin
   Result:=jetNone;
   i:=FUserSymbols.IndexOf(AName);
-  if i<0 then exit;
+  if i<0 then
+  begin
+    if Use_Session then
+      if NameEqual(AName,FSessionVarName) then
+      begin
+        Result:=jetArray;  //Session as array?
+      end;
+    exit;
+  end;
   with PJETypeRec(FUserSymbols.Objects[i])^ do
     Result:=BasicType;
 end;
@@ -2059,7 +2207,7 @@ end;
 
 function TJEParser.TransFUNCTION(JObj: TJEBranch; Ident: Integer): String;
 begin
-  Result:=TransFuncOp(TJEBranch(JObj),JED_Func,Ident);
+  Result:=StdTransFuncEx(JObj,Ident,false);
 end;
 
 function TJEParser.TransNEW(JObj: TJEBranch; Ident: Integer): String;
@@ -2173,6 +2321,8 @@ begin
                 else if Op=JEF_IIF then begin Result:=TransIIF(JObj,Ident); exit; end;
               'N':
                 if Op=JEF_New then begin Result:=TransNEW(JObj,Ident); exit; end;
+              'R':
+                if Op=JEF_Rem then begin Result:=TransComment(JObj,Ident,cmtLine); exit; end;
             end;
           end;
           4:
@@ -2217,6 +2367,9 @@ begin
           6:
           begin
             case Ch of
+              'D':
+                if Op=JEF_DocRem then begin Result:=TransComment(JObj,Ident,cmtDoc); exit; end
+                else if Op=JEF_DirRem then begin Result:=TransComment(JObj,Ident,cmtDirective); exit; end;
               'I':
                 {if Op=JEF_IfElse then
                 begin Result:=TransIFELSE(JObj,Ident); exit; end
@@ -2233,6 +2386,8 @@ begin
           7:
           begin
             case Ch of
+              'C':
+                if Op=JEF_Comment then begin Result:=TransComment(JObj,Ident,cmtBlock); exit; end;
               'F':
                 if Op=JEF_ForEach then begin Result:=TransFOREACH(JObj,Ident); exit; end;
               'I':
@@ -2297,7 +2452,7 @@ end;
 
 function TJEParser.TransPROCEDURE(JObj: TJEBranch; Ident: Integer): String;
 begin
-  Result:=TransFuncOp(TJEBranch(JObj),JED_Proc,Ident);
+  Result:=StdTransFuncEx(JObj,Ident,true);
 end;
 
 function TJEParser.TransREPEAT(JObj: TJEBranch; Ident: Integer): String;
@@ -2331,9 +2486,10 @@ begin
   SetNextNeedVal(true);
   ExprStr:=Node2Str(Z,false,OpRk,0,0);
   if FNodeAy[FCurNodeIdx].NoLeftOutput then
-    Result:=AddLineEnd(ExprStr)
+    Result:=ExprStr
   else
     Result:=StdMakeSetVal(VarStr,ExprStr);
+  Result:=AddLineEnd(Result);  //2012-12-19
 end;
 
 function TJEParser.TransSpaceOp(JObj: TJEBranch; const Op: String; Ident: Integer): String;
@@ -2398,6 +2554,43 @@ begin
   Result:=TransFuncOp(TJEBranch(JObj),JEF_Succ,Ident);
 end;
 
+function TJEParser.TransComment(JObj: TJEBranch; Ident: Integer; Kind: TCommentKind): String;
+var
+  AfterLineBreak:Boolean;
+begin
+  if not Keep_Comment then
+  begin
+    Result:='';
+    exit;
+  end;
+  Result:=Copy(JObj.OptString(JEP_Param1),2,MaxInt); //.OptString(JEP_Param1);
+  if Result='' then exit;
+  AfterLineBreak:=JObj.OptBoolean(JEP_Param2,true);
+  FIgnorePervLineDiv:=not AfterLineBreak;  //设置全局标志
+  FIgnorePostLineDiv:=true; //(Kind=cmtLine);
+  if Kind in [cmtLine,cmtDoc] then
+  begin
+    if FLineComment.Count>0 then
+    begin
+      if Kind=cmtLine then
+        Result:=FLineComment[0]+Result
+      else
+        Result:=GetDocRemHead+Result;
+      if AfterLineBreak then
+        Result:=IdentLen(Ident)+Result
+      else
+        Result:=#9+Result;
+      exit;
+    end;
+  end;
+  if FBlockComment.Count>0 then
+  begin
+    Result:=IdentLen(Ident)+FBlockComment.Names[0]+Result+FBlockComment.ValueFromIndex[0];
+    exit;
+  end;
+  Result:='';
+end;
+
 function TJEParser.TransCommonOp(JObj: TJEBranch; const Op: String;
   Ident, PrnRank: Integer): String;
 var
@@ -2434,15 +2627,20 @@ begin
       for i:=1 to n do
       begin
         SetNextNeedVal((i=n) and NodeNeedVal);
-        BodyStr:=Node2Str(Opt(JEP_ParamHeader+IntToStr(i)),IsCommonFunc,OpRk,PrnRank,Ident);
+        FIgnorePervLineDiv:=false;
+        FIgnorePostLineDiv:=false;
+        Z:=Opt(JEP_ParamHeader+IntToStr(i));
+        BodyStr:=Node2Str(Z,IsCommonFunc,OpRk,PrnRank,Ident);
         Combine_BeforeAfter(BodyStr);
         Clear_BeforeAfter;
-        if LineEndStr<>'' then
+        if not FIgnorePostLineDiv and (LineEndStr<>'') then
           BodyStr:=AddLineEnd(BodyStr);
         if i=1 then
           Result:=BodyStr
+        else if not FIgnorePervLineDiv then
+          Result:=Result+LineDivStr+BodyStr
         else
-          Result:=Result+LineDivStr+BodyStr;
+          Result:=Result+BodyStr;
       end;
     end;
     exit;
@@ -2568,7 +2766,14 @@ end;
 
 function TJEParser.TransTypeVal(const ValStr: String; Ident: Integer): String;
 begin
-  Result:=ValStr;
+  Result:=Copy(ValStr,3,MaxInt);
+  if Result='' then exit;
+  case ValStr[2] of
+    JEPT_Hex:     Result:='0x'+Result;
+    JEPT_EchoStr: Result:='echo('+QuotedStr(Result)+')';
+    else
+      Result:=ValStr;
+  end;
 end;
 
 function TJEParser.TransVAR(JObj: TJEBranch; Ident: Integer): String;
@@ -2591,7 +2796,8 @@ begin
   Result:=TransFuncOp(TJEBranch(JObj),JEF_WhileNot,Ident);
 end;
 
-function TJEParser.Trans_BodyDef(JObj: TJENode; Ident: Integer): String;
+function TJEParser.Trans_BodyDef(JObj: TJENode; Ident: Integer;
+  const ObjName: String): String;
 begin
   Result:=TransANode(JObj,Ident);
 end;
@@ -2652,6 +2858,8 @@ begin
   Z:=JObj.Opt(JEP_Param1);
   SetNextNeedVal(true);
   Result:=Node2Str(Z,false,Rank,PrnRank,0);
+  if Op<>'' then
+    C1:=Op[1];
   if C1 in MathOp2+CompOp2+['.'] then  //like:  P1/P2
     Result:=Result+Func
   else   //like:  P1 mod P2
@@ -2758,10 +2966,17 @@ end;
 
 function TJEParser.VarForLan(const VarName: String): String;
 begin
+  if Use_Session and (VarName=JEP_Session) then  //2013-03-29
+  begin
+    Result:=FSessionVarName;
+    exit;
+  end;
   if not IsNormalVarName(VarName) then  //2010-04-02
-    Result:='"'+StringReplace(VarName,'"','""',[rfReplaceAll])+'"'
-  else
-    Result:=VarName;
+  begin
+    Result:='"'+StringReplace(VarName,'"','""',[rfReplaceAll])+'"';
+    exit;
+  end;
+  Result:=VarName;
 end;
 
 procedure TJEParser.AfterInitParser;
@@ -2769,13 +2984,13 @@ var
   i:Integer;
   ch:TJEChar;
 begin
-  FCommetHC:=[];
-  with FLineCommet do
+  FCommentHC:=[];
+  with FLineComment do
     for i:=0 to Pred(Count) do
-      Include(FCommetHC,Strings[i][1]);
-  with FBlockCommet do
+      Include(FCommentHC,Strings[i][1]);
+  with FBlockComment do
     for i:=0 to Pred(Count) do
-      Include(FCommetHC,Strings[i][1]);
+      Include(FCommentHC,Strings[i][1]);
   FHeadKeywords.CaseSensitive:=not FWordNoCase;
   FHeadKeywords.Sorted:=true;
   FSEEqual:=(FSetValOp=FEqualOp);
@@ -2909,8 +3124,8 @@ begin
   ClearUserSymbols;
   FUserSymbols.Free;
   FDefLevels.Free;
-  FLineCommet.Free;
-  FBlockCommet.Free;
+  FLineComment.Free;
+  FBlockComment.Free;
   FKeywords.Free;
   FHeadKeywords.Free;
   FLanFuncs.Free;
@@ -3198,7 +3413,7 @@ begin
   Result:=[#9,' '];
 end;
 
-function TJEParser.GetBlockCommetStrs: TStrings;
+function TJEParser.GetBlockCommentStrs: TStrings;
 begin
   Result:=TStringList.Create;
   Result.Values['{']:='}';
@@ -3292,12 +3507,28 @@ begin
   end;
 end;
 
+function TJEParser.GetFuncTypeStr(JObj: TJENode): String;
+var
+  Node:TJENode;
+begin
+  if JObj is TJEBranch then
+  begin
+    Node:=TJEBranch(JObj).Opt(JEP_Type);
+    if Node<>nil then
+    begin
+      Result:=Node.toString;
+      exit;
+    end;
+  end;
+  Result:='';
+end;
+
 function TJEParser.GetLineBreakOps: TJECharSet;
 begin
   Result:=[';'];
 end;
 
-function TJEParser.GetLineCommetOps: TStrings;
+function TJEParser.GetLineCommentOps: TStrings;
 begin
   Result:=TStringList.Create;
   Result.Add('//');
@@ -3561,8 +3792,8 @@ begin
   FSpecialHCs:=GetSpecialCharSet;
   FMathStrs:=GetMathStrs;
   FCompStrs:=GetCompStrs;
-  FLineCommet:=GetLineCommetOps;
-  FBlockCommet:=GetBlockCommetStrs;
+  FLineComment:=GetLineCommentOps;
+  FBlockComment:=GetBlockCommentStrs;
   FVCBeginEqual:=FVBegin=FCBegin;
   FVFBeginEqual:=FVBegin=FFBegin;
   FLineBreakCh:=OpCh_Sentence;
@@ -3707,6 +3938,16 @@ begin
   Result:=false;
 end;
 
+function TJEParser.NameEqual(const NameA, NameB: String): Boolean;
+begin
+  Result:=Length(NameA)=Length(NameB);
+  if not Result then exit;
+  if FWordNoCase then
+    Result:=UpperCase(NameA)=UpperCase(NameB)
+  else
+    Result:=NameA=NameB;
+end;
+
 function TJEParser.NextTo(const EndStr: String; ToEnd: Boolean; PtrBack: Boolean): String;
 var
   i,j,n,n2:Integer;
@@ -3722,7 +3963,7 @@ begin
   begin
     if ToEnd then
     begin
-      Result:=Copy(FSource,FCurPos,n-FCurPos-n2+1);
+      Result:=Copy(FSource,FCurPos,n-FCurPos{-n2}+1); //2013-01-05  Bug fixed
       FCurPos:=n+1;
     end;
     exit;
@@ -3784,10 +4025,11 @@ end;
 
 function TJEParser.NextToken: String;
 var
-  i,j,n,SLen:Integer;
+  i,j,n,SLen,i0:Integer;
   Ch,C2:Char;
   StrVal,mstr:String;
   WCh:WideChar;
+  AfterLineBreak:Boolean;
   function ExprStart:Boolean; 
   begin
     Result:=CurToken.Kind in [tkOPERATOR,tkDELIMITER,tkBRACKET,tkKEYWORD];
@@ -3810,14 +4052,25 @@ begin
     if Ch in FSpecialHCs then
       if OnSpecialHeadChar(Ch,i) then exit;
     // Is commet ?
-    if Ch in FCommetHC then
+    if Ch in FCommentHC then
     begin
-      if StrMatch(FSource,i,FLineCommet)>=0 then
+      if StrMatch(FSource,i,FLineComment)>=0 then
       begin
+        if Keep_Comment then i0:=i;  //2013-03-29      
         repeat
           Inc(i);
           if i>n then break;
         until (FSource[i] in [#13,#10]);
+        if Keep_Comment then
+        begin
+          //对Basic中紧跟在语句后的注释进行处理（解释为空换行） ...  '??
+          AfterLineBreak:=(not FLineBreakSentence or (CurToken.Kind in [tkEOLN,tkLINEDIV]));
+          //SetComment(Copy(FSource,i0+1,i-i0-1),cmtLine);  //2013-03-29
+          StrVal:=Copy(FSource,i0+1,i-i0-1);
+          SetCommentToken(StrVal,cmtLine,FCurPos,AfterLineBreak);
+          Result:=StrVal;
+          break;
+        end;
         if i<=n then
         begin
           while FSource[i] in [#13,#10] do
@@ -3838,10 +4091,10 @@ begin
         end;
         break;
       end;
-      j:=StrMatchName(FSource,i,FBlockCommet);
+      j:=StrMatchName(FSource,i,FBlockComment);
       if j>=0 then
       begin
-        mstr:=FBlockCommet.ValueFromIndex[j];
+        mstr:=FBlockComment.ValueFromIndex[j];
         SLen:=Length(mstr);
         C2:=mstr[1];
         repeat
@@ -4363,7 +4616,12 @@ begin
                   continue;
               end
               else if CurToken.Kind in [tkEOLN,tkLINEDIV] then
+                continue
+              else if CurToken.Kind=tkRawText then  //2012-12-25  tkRawText
+              begin
+                PushLineBreakOp;  //2013-01-05
                 continue;
+              end;
             end
             else if ExpectPerfix>=0 then
             begin
@@ -4417,6 +4675,20 @@ begin
       begin
         PushBracketOp(StrVal);
       end;
+      tkRawText:  //2012-12-22
+      begin
+        if InOneLine and LnBreakBeforeRawText then
+        begin
+          PushLineBreakOp;
+          exit;
+        end;
+        PushRawText(StrVal,true);
+        if (Result<0) or (Result>FCurNodeLevel) then Result:=FCurNodeLevel;
+      end;
+      tkComment:  //2013-03-30
+      begin
+        PushCommentToken;
+      end;
       tkEOLN:
       begin
         if InOneLine then exit;
@@ -4427,6 +4699,7 @@ begin
       begin
         if FLineBreakSentence then TryTransOneWordStatement;
         PushLineBreakOp;
+        if (Result<0) or (Result>FCurNodeLevel) then Result:=FCurNodeLevel;
       end;
     end;
     NextToken;
@@ -4685,6 +4958,69 @@ begin
   end
   else
     PushBracket(Op);
+end;
+
+procedure TJEParser.PushComment(const S: String; Kind: TCommentKind;
+  AddLineDiv, AfterLineBreak: Boolean);
+var
+  OriLevel:Integer;
+begin
+  OriLevel:=FCurNodeLevel;
+  if AddLineDiv then PushLineBreakOp else Inc(FCurBlockCount);
+  case Kind of
+    cmtLine:   PushFunc(JEF_Rem);
+    cmtBlock:  PushFunc(JEF_Comment);
+    cmtDoc:    PushFunc(JEF_DocRem);
+    else       PushFunc(JEF_DirRem);
+  end;
+  if not AddLineDiv then Inc(FCurBlockCount);
+  PushString(S);
+  if not AfterLineBreak then
+  begin
+    //GoNextParam;
+    PushBool(false);
+  end;
+  if AddLineDiv then
+    PushLineBreakOp
+  else begin
+    Dec(FCurBlockCount,2);
+    FCurNodeLevel:=OriLevel;  //恢复到注释前的指针状态
+  end;
+end;
+
+procedure TJEParser.PushCommentToken(AddLineDiv: Boolean);
+var
+  k:TCommentKind;
+  StrVal:String;
+  TagCh:Char;
+  AfterLineBreak:Boolean;
+begin
+  with CurToken do
+  begin
+    if Kind<>tkComment then exit;
+    StrVal:=Token;
+  end;
+  if StrVal<>'' then
+  begin
+    AfterLineBreak:=true;
+    case Length(CurToken.CaseOKToken) of
+      0: TagCh:=CommentKinds[cmtLine];
+      1: TagCh:=CurToken.CaseOKToken[1];
+      else
+      begin
+        TagCh:=CurToken.CaseOKToken[1];
+        AfterLineBreak:=false;
+      end;
+    end;
+    if TagCh=CommentKinds[cmtLine] then
+      PushComment(StrVal,cmtLine,AddLineDiv,AfterLineBreak)
+    else if TagCh=CommentKinds[cmtBlock] then
+      PushComment(StrVal,cmtBlock,AddLineDiv,AfterLineBreak)
+    else if TagCh=CommentKinds[cmtDirective] then
+      PushComment(StrVal,cmtDirective,AddLineDiv,AfterLineBreak)
+    else
+      PushComment(StrVal,cmtDoc,AddLineDiv,AfterLineBreak)
+  end;
 end;
 
 procedure TJEParser.PushDefine(const TypeStr: String);
@@ -5280,12 +5616,21 @@ begin
     if AOp[1]<>'[' then
     begin
       FCurNodeLevel:=InBlockLevel2(ARank);
-      if FLevelNodes[FCurNodeLevel].Obj=nil then  //2012-06-13  空语素后跟双目算子
+      with FLevelNodes[FCurNodeLevel] do
       begin
-        Dec(FCurNodeLevel);
-        PushEmptyItem;
-        PushOp2(AOp,ARank);
-        exit;
+        if Obj=nil then  //2012-06-13  空语素后跟双目算子   -xyz
+        begin
+          Dec(FCurNodeLevel);
+          PushEmptyItem;
+          PushOp2(AOp,ARank);
+          exit;
+        end;
+        if (Rank>ARank) and (opKind=jokStatement) then  //2012-12-19  考虑 IF -a 的情况
+        begin
+          PushEmptyItem;
+          PushOp2(AOp,ARank);
+          exit;
+        end;
       end;
     end
     else
@@ -5384,9 +5729,157 @@ begin
   end;
 end;
 
+procedure TJEParser.PushRawText(const Text: String; AddLineBreak: Boolean);
+begin
+  if LnBreakBeforeRawText then
+    PushLineBreakOp;
+  PushOutStrVal(Text,AddLineBreak);
+end;
+
 procedure TJEParser.PushSetValOp;
 begin
   PushOp2(JOP_SetValue,GetSetValOpRank);
+end;
+
+procedure TJEParser.PushSpaceBreakOp;
+var
+  IsEmpty:Boolean;
+  i,n:Integer;
+  Z,Z2:TZAbstractObject;
+  J,JP,JN:JSONObject;
+  mstr:String;
+  AClass:TClass;
+  label CommonCase;
+begin
+  if FFuncWithoutBracket then  //离开虚拟的括号
+  begin
+    Dec(FCurBlockCount);
+    FFuncWithoutBracket:=false;
+  end;
+  AClass:=FLevelNodes[FCurNodeLevel].Obj.ClassType;
+  //最后一个Symbol是简单值或变量的情况 -- 应n当将其提升，嵌入到Func表达式内
+  if AClass<>TJEBranch then
+  begin
+    n:=FCurNodeLevel-1;
+    with FLevelNodes[n] do
+    begin
+      if OpKind=jokItems then exit;      
+      JP:=JSONObject(Obj); //表达式JSON对象
+    end;
+    //没有操作符的表达式 -- 填入Func
+    if FLevelNodes[n].OpKind=jokNone then
+    begin
+      JP.Put(JEP_Operator,JEP_SpaceBreak);
+      with FLevelNodes[n] do
+      begin
+        OpKind:=jokSentenceDiv;
+        Rank:=RK_SpaceBreak;
+      end;
+      Dec(FCurNodeLevel);
+      exit;
+    end;
+    with FLevelNodes[n] do
+    begin
+      if (BC>=FCurBlockCount) and (Op<>'[') and (OpKind<>jokStatement) then
+      begin
+        if (OpKind<>jokNone) and (RK_Sentence<=Rank) then
+        begin
+          FCurNodeLevel:=InBlockLevel(RK_Sentence);
+          goto CommonCase;
+        end;
+      end;
+    end;
+    with JP do
+    begin
+      mstr:=KeyByIndex[Length-1];  //最后一个Key
+      Z:=Remove(mstr);
+    end;
+    with FLevelNodes[FCurNodeLevel] do
+    begin
+      Obj:=NewFuncObj(JEP_SpaceBreak);
+      JSONObject(Obj).Put(JEP_Param1,Z);
+      JP.Put(mstr,Obj);
+      Op:=OpCh_Sentence; //Func[1]; //AddMode;
+      Rank:=RK_SpaceBreak;
+    end;
+    exit;
+  end;
+  FCurNodeLevel:=InBlockLevel(RK_Sentence);
+  // Set x=new Car  --对于含有statement的表达式，换行应跳出表达式  2012-05-31
+  if FCurNodeLevel>0 then
+  begin
+    with FLevelNodes[FCurNodeLevel] do
+    begin
+      if (OpKind=jokStatement) and (FLevelNodes[FCurNodeLevel-1].SC=FStatementLevel) then
+      begin
+        Dec(FCurNodeLevel);
+      end;
+    end;
+  end;
+CommonCase:
+  //2012-06-05  考虑class内部 MEMBERS 数组的情况
+  if FLevelNodes[FCurNodeLevel].OpKind=jokItems then exit;  
+  J:=JSONObject(FLevelNodes[FCurNodeLevel].Obj);
+  if J=nil then exit; 
+  IsEmpty:=false;
+  if (FLevelNodes[FCurNodeLevel].OpKind=jokNone) then
+  begin
+    J.Put(JEP_Operator,JEP_SpaceBreak);
+    //FLevelNodes[FCurNodeLevel].OpCh:=AddMode;
+    with FLevelNodes[FCurNodeLevel] do
+    begin
+      Op:=JEP_SpaceBreak;
+      Rank:=RK_SpaceBreak;
+      OpKind:=jokSentenceDiv;
+    end;
+  end
+  else if (FLevelNodes[FCurNodeLevel].OpKind=jokSentenceDiv){ and (Func=';')} then  //平级的 ; 号   2010-06-28
+    exit
+  else begin
+    if FCurNodeLevel>0 then
+      with FLevelNodes[FCurNodeLevel-1] do
+        if (OpKind=jokItems) and (SC=FStatementLevel) then  //Class定义内部，一个定义语句结束后的断句
+        begin
+          Dec(FCurNodeLevel);
+          exit;
+        end;
+    if FLevelNodes[FCurNodeLevel].SC<FStatementLevel then exit;  //Statement内部的分行，无视  
+    JN:=NewFuncObj(JEP_SpaceBreak);
+    FLevelNodes[FCurNodeLevel+1].Obj:=JN;
+    //按照左侧优先结合的规律进行重新组合——考虑运算符的优先级
+    // not X  =>  (not X) or Y
+    //当前Level的所有者
+    if FCurNodeLevel>0 then
+      JP:=JSONObject(FLevelNodes[FCurNodeLevel-1].Obj)
+    else
+      JP:=nil;
+    if JP<>nil then
+    begin
+      n:=JP.Length;
+      //在含有前缀的情况下，最后一个Key不是 P + (n-1)  2011-09-20
+      mstr:=JP.KeyByIndex[n-1];
+      JN.Put(JEP_Param1,JP.Remove(mstr));
+      JP.Put(mstr,JN);
+    end
+    else begin
+      if FStatementLevel>FLevelNodes[FCurNodeLevel].SC then
+      begin
+        // Statement内部的 语句分隔符 —— 不能跑到Statement外面去
+        with J do
+          Put(JEP_ParamHeader+IntToStr(length),JN);
+        Inc(FCurNodeLevel);
+      end
+      else
+        JN.Put(JEP_Param1,J);
+    end;
+    with FLevelNodes[FCurNodeLevel] do
+    begin
+      Obj:=JN;
+      Op:=JEP_SpaceBreak;
+      Rank:=RK_SpaceBreak;
+      OpKind:=jokSentenceDiv;
+    end;
+  end;
 end;
 
 procedure TJEParser.PushStatement(const S: String);
@@ -5431,7 +5924,12 @@ end;
 procedure TJEParser.PushVar(const VarStr: String);
 var
   e,n:Integer;
+  StdNameStr:String;
 begin
+  if Use_Session and NameEqual(VarStr,FSessionVarName) then
+    StdNameStr:=JEP_Session
+  else
+    StdNameStr:=VarStr;
   e:=GetExprLevel;
   CheckFuncNoBracket(e);
   with FLevelNodes[e] do
@@ -5441,7 +5939,7 @@ begin
       FCurNodeLevel:=e+1;
       with JSONArray(Obj) do
       begin
-        Put(VarStr);
+        Put(StdNameStr);
         AfterPushItem(LastItem);
       end;
       exit;
@@ -5449,7 +5947,7 @@ begin
     with TJEBranch(Obj) do
     begin
       n:=Length;
-      Put(JEP_ParamHeader+IntToStr(n),VarStr);
+      Put(JEP_ParamHeader+IntToStr(n),StdNameStr);
       FCurNodeLevel:=e+1;
       AfterPushItem(ValObjByIndex[n]);
     end;
@@ -5693,22 +6191,6 @@ begin
   SetLength(Procs,0);
 end;
 
-procedure TJEParser.SetCurToken(const AStr: String; AKind: TTokenKind; APos: Integer);
-begin
-  FLastToken:=FCurToken;
-  with FCurToken do
-  begin
-    Token:=AStr;
-    if (AKind=tkWORD) and FWordNoCase then
-      CaseOKToken:=UpperCase(Token)
-    else
-      CaseOKToken:=Token;
-    StartPos:=APos;
-    Kind:=AKind;
-    KWIdx1:=0;
-  end;
-end;
-
 procedure TJEParser.SetSource(const Value: String);
 begin
   FSource := Value;
@@ -5724,7 +6206,7 @@ begin
   TryTransOneWordStatement;  //2012-05-31
   FCurNodeLevel:=GetStatementLevel;
   Dec(FStatementLevel);
-  if BreakLine then
+  if BreakLine and (CurToken.Kind<>tkRawText) then     //2012-12-25  tkRawText for --  if x then%>ok<%end if%><%
     PushLineBreakOp;
 end;
 

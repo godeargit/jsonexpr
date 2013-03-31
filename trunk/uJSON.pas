@@ -506,7 +506,7 @@ begin
         try
           Result:=JSONObject.Create(Str);
         except
-          //
+          Result:=nil;
         end;
         exit;
       end;
@@ -515,7 +515,7 @@ begin
         try
           Result:=JSONArray.Create(Str);
         except
-          //
+          Result:=nil;
         end;
         exit;      
       end;
@@ -2073,7 +2073,7 @@ end;
      *)
 function JSONObject.toString3(indentFactor, indent: integer): string;
 var
-  j , i , n , newindent: integer;
+  j , n , newindent: integer;
   _keys: TStringList;
   o, sb: string;
 begin
@@ -2508,7 +2508,7 @@ end;
 
 function JSONObject.GetObject(const key: string): TObject;
 begin
-
+  Result:=OptObject(Key);
 end;
 
 procedure JSONObject.SetCascadeValue(const Value: String;
@@ -2924,7 +2924,6 @@ end;
 destructor JSONArray.destroy;
 var
   i: integer;
-  obj: TObject;
 begin
   for i:=Pred(myArrayList.Count) downto 0 do
     SafeFreeJObj(myArrayList[i]);
@@ -3631,7 +3630,7 @@ end;
 
 function JSONArray.toString3(indentFactor, indent: integer): string;
 var
-  len, i, j, newindent: integer;
+  len, i, newindent: integer;
   sb: string;
 begin
   len:=length();
