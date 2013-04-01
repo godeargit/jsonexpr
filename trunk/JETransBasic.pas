@@ -97,6 +97,7 @@ type
     function Parse_Func(const PerfixStr: String; NeedNext: Boolean):Integer;
     function StrOpResultIsString(const StrVal: String; BranchNode: TJEBranch):TBool3; override;
     procedure PushRawText(const Text:String; AddLnBreak: Boolean=true); override;
+    function CheckForOneLine:Boolean;
   public
     property TransForToFOR:Boolean read FTransForToFOR write SetTransForToFOR;
     property ASPMode:Boolean read FASPMode;
@@ -182,6 +183,8 @@ const
   //JBasic_SHL='SHL';
   JBasic_SetValue='=';
   JBasic_RawEnd='<%';
+  BreakLineKinds=[tkEOLN,tkLINEDIV,tkRawText,tkComment];
+  NextTokenKinds=LineBreakKinds;
 
 var
   SingleOpMap:array [Char] of String;
@@ -1207,6 +1210,19 @@ begin
     Result:=inherited VarForLan(VarName);
 end;
 
+function TJEBasicParser.CheckForOneLine: Boolean;
+begin
+  //2013-04-01  ¿¼ÂÇ½ô¸úÔÚthenÖ®ºóµÄ×¢ÊÍ£¬Èç£º  if a=1 then 'A is 1
+  if CurToken.Kind in BreakLineKinds then
+  begin
+    Result:=false;
+    if CurToken.Kind in NextTokenKinds then  //2012-12-23
+      NextToken;
+  end
+  else
+    Result:=true;
+end;
+
 function TJEBasicParser.CurExprIsArray: Boolean;
 var
   lv:Integer;
@@ -1656,8 +1672,7 @@ begin
       end;
       if Result<0 then Result:=lv;
     end;
-    while (CurToken.Kind in [tkEOLN,tkLINEDIV]) do
-      NextToken;
+    JumpOverLineBreaks;
     ExpectKW;
   end;
 end;
@@ -1715,8 +1730,7 @@ Loop [{While | Until} condition]
       PrintErr('Expect expression here.');
       PushBool(true);
     end;
-  while (CurToken.Kind in [tkEOLN,tkLINEDIV]) do
-    NextToken;
+  JumpOverLineBreaks;
   GoNextStatementParam;
   ParseStatements;
   ExpectKW;
@@ -1917,18 +1931,20 @@ begin
     end;
   end;
   GoNextStatementParam;
-  OneLine:=true;
-  while (CurToken.Kind in [tkEOLN,tkLINEDIV]) do
+  OneLine:=CheckForOneLine;
+  {//2013-04-01  ¿¼ÂÇ½ô¸úµÄ×¢ÊÍ
+  if CurToken.Kind in BreakLineKinds then
   begin
     OneLine:=false;
-    NextToken;
-  end;
+    if CurToken.Kind in NextTokenKinds then
+      NextToken;
+  end;}
   ParseStatements(OneLine);
   ExpectKW;
   if CurToken.KWIdx1=BASKW_NEXT+1 then
   begin
     NextToken;
-    while not (CurToken.Kind in [tkEOLN,tkLINEDIV]) do
+    while not (CurToken.Kind in LineBreakKinds) do
     begin
       if CurToken.Kind=tkEND then exit;
       NextToken;
@@ -1980,7 +1996,7 @@ begin
   begin
     PrintErr('Expect "THEN" here.');
     OneLine:=true;
-    while (CurToken.Kind in [tkEOLN,tkLINEDIV]) do
+    while (CurToken.Kind in LineBreakKinds) do
     begin
       OneLine:=false;
       NextToken;
@@ -1992,14 +2008,16 @@ begin
   begin
     GoNextStatementParam;
     NextToken;
-    if CurToken.Kind in [tkEOLN,tkLINEDIV,tkRawText] then
+    OneLine:=CheckForOneLine;
+    {
+    if CurToken.Kind in BreakLineKinds then
     begin
       OneLine:=false;
-      if CurToken.Kind<>tkRawText then  //2012-12-23
+      if CurToken.Kind in NextTokenKinds then  //2012-12-23
         NextToken;
     end
     else
-      OneLine:=true;
+      OneLine:=true;}
   end;
   if LvChange then
   begin
@@ -2015,7 +2033,7 @@ begin
   begin
     //ModifyFuncName(Result,'IFELSE');  //2012-05-29
     repeat
-      if not OneLine and not (LastToken.Kind in [tkEOLN,tkLINEDIV]) then
+      if not OneLine and not (LastToken.Kind in LineBreakKinds) then
         PrintErr('"ELSEIF" must be first statement on the line.');
       GoNextStatementParam;
       NextToken;
@@ -2023,8 +2041,7 @@ begin
       if CurToken.KWIdx1=0 then
       begin
         PrintErr('Expect "THEN" here.');
-        while (CurToken.Kind in [tkEOLN,tkLINEDIV]) do
-          NextToken;
+        JumpOverLineBreaks;
         if CurToken.Kind=tkEND then exit;
         GoNextStatementParam;
       end
@@ -2033,8 +2050,7 @@ begin
         GoNextStatementParam;
         NextToken;
       end;
-      while (CurToken.Kind in [tkEOLN,tkLINEDIV]) do
-        NextToken;
+      JumpOverLineBreaks;
       TryParseStatements(OneLine);  //ParseStatements(OneLine);
       ExpectKW;
     until CurToken.KWIdx1<>BASKW_ELSEIF+1;
@@ -2045,8 +2061,7 @@ begin
       PrintErr('"ELSE" must be first statement on the line.');
     GoNextStatementParam;
     NextToken;
-    while (CurToken.Kind in [tkEOLN,tkLINEDIV]) do
-      NextToken;
+    JumpOverLineBreaks;
     ParseStatements(OneLine);
   end
   else if (CurToken.Kind in [tkEOLN,tkLINEDIV]) then
@@ -2057,11 +2072,10 @@ begin
       NextToken;
       exit;
     end;
-    while (CurToken.Kind in [tkEOLN,tkLINEDIV]) do
-      NextToken;
+    JumpOverLineBreaks;
     ExpectKW;
   end;
-  if OneLine and (CurToken.Kind in [tkEOLN,tkLINEDIV]) then
+  if OneLine and (CurToken.Kind in LineBreakKinds) then
   begin
     //NextToken;
   end
@@ -2105,7 +2119,7 @@ begin
       PushCommentToken(false);
       NextToken;
     end;
-    if not (CurToken.Kind in [tkEOLN,tkLINEDIV]) then
+    if not (CurToken.Kind in LineBreakKinds) then
     begin
       PrintErr('Expect EOLN here.');
       while not (CurToken.Kind in [tkEOLN,tkLINEDIV,tkEND]) do
@@ -2406,10 +2420,9 @@ begin
   NextToken;
   if ParseExpr<0 then
     PrintErr('Expect expr here.');
-  if CurToken.Kind in [tkEOLN,tkLINEDIV] then
+  if CurToken.Kind in LineBreakKinds then
   begin
-    while CurToken.Kind in [tkEOLN,tkLINEDIV] do
-      NextToken;
+    JumpOverLineBreaks;
   end
   else
     PrintErr('Expect EOLN here.');
@@ -2419,7 +2432,7 @@ begin
   if CurToken.KWIdx1=BASKW_WEND+1 then
   begin
     NextToken;
-    while not (CurToken.Kind in [tkEOLN,tkLINEDIV]) do
+    while not (CurToken.Kind in LineBreakKinds) do
     begin
       if CurToken.Kind=tkEND then exit;
       NextToken;
