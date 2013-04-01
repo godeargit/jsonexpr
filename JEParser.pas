@@ -30,6 +30,8 @@ type
     tkStart,
     tkEND
   );
+const
+  LineBreakKinds=[tkEOLN,tkLINEDIV];
 type
   TJEOperators=(
     jeopStEnd,    // ;
@@ -402,12 +404,12 @@ type
     FTmpVarNum: Integer;
     FNextNeedValue: Boolean;
     FRootNeedValue: Boolean;
-    FIgnorePervLineDiv: Boolean;
-    FIgnorePostLineDiv: Boolean;
     procedure SetIdent(const Value: String);
     function GetIdent: String;
     procedure SetRootNeedValue(const Value: Boolean);
   protected
+    FIgnorePervLineDiv: Boolean;
+    FIgnorePostLineDiv: Boolean;
     property TreeBaseLan:String read FTreeBaseLan;
     property TreeBaseLanClass: TJEParserClass read FTreeBaseLanClass;
     function ParamDefDiv:String; virtual;
@@ -1383,7 +1385,7 @@ end;
 
 procedure TJEParser.JumpOverLineBreaks;
 begin
-  while CurToken.Kind in [tkEOLN,tkLINEDIV] do
+  while CurToken.Kind in LineBreakKinds do
     NextToken;
 end;
 
@@ -2642,6 +2644,8 @@ begin
         else
           Result:=Result+BodyStr;
       end;
+      FIgnorePervLineDiv:=false;
+      FIgnorePostLineDiv:=false;
     end;
     exit;
   end;
@@ -4064,7 +4068,7 @@ begin
         if Keep_Comment then
         begin
           //对Basic中紧跟在语句后的注释进行处理（解释为空换行） ...  '??
-          AfterLineBreak:=(not FLineBreakSentence or (CurToken.Kind in [tkEOLN,tkLINEDIV]));
+          AfterLineBreak:=(not FLineBreakSentence or (CurToken.Kind in LineBreakKinds));
           //SetComment(Copy(FSource,i0+1,i-i0-1),cmtLine);  //2013-03-29
           StrVal:=Copy(FSource,i0+1,i-i0-1);
           SetCommentToken(StrVal,cmtLine,FCurPos,AfterLineBreak);
@@ -4408,7 +4412,7 @@ function TJEParser.ParseCBlock: Integer;
 begin
   if CurToken.Token='{' then
   begin
-    while (CurToken.Kind in [tkEOLN,tkLINEDIV]) do
+    while (CurToken.Kind in LineBreakKinds) do
       NextToken;
     GoNextStatementParam;
     ParseStatements;
@@ -4615,7 +4619,7 @@ begin
                 else
                   continue;
               end
-              else if CurToken.Kind in [tkEOLN,tkLINEDIV] then
+              else if CurToken.Kind in LineBreakKinds then
                 continue
               else if CurToken.Kind=tkRawText then  //2012-12-25  tkRawText
               begin
@@ -4662,7 +4666,7 @@ begin
             else
               continue;
           end
-          else if CurToken.Kind in [tkEOLN,tkLINEDIV] then
+          else if CurToken.Kind in LineBreakKinds then
             continue;               
         end;
         exit;
