@@ -170,6 +170,10 @@ ver 0.5.1  By creation_zy
 ver 0.5.2  By creation_zy
   Support "Session" var in language translating.
   Can keep comment in translating.
+
+2013-04-23
+ver 0.5.3  By creation_zy
+  Fix bugs on object attr access.
 }
 
 unit UJSONExpr;
@@ -340,6 +344,7 @@ type
     procedure SetUseVarHelperOnTextGen(const Value: Boolean);
     procedure SetEchoFunc(const Value: TPrintFunc);
     function TypeStrToVar(const Str: String):Variant;
+    function VHEnterObj(const ObjName: String):TJEVarHelper;
   public
     property VarHelper: TJEVarHelper read FVarHelper;
     property FuncHelper: TJEFuncHelper read FFuncHelper;
@@ -417,8 +422,8 @@ type
     function VarIsObj(const VarName: String):Boolean; virtual;
     function SetObjectVar(const VarName: String; JObj: TJSONObj):Boolean; virtual;
     function SetObjVar(const VarName: String; AObj: TObject):Boolean; virtual;
-    function GetObjAttr(AObj: TObject; const Attr: String):Variant; virtual;
-    function SetObjAttr(AObj: TObject; const Attr: String; Val:Variant):Boolean; virtual;
+    function GetObjAttr(const Attr: String):Variant; virtual;
+    function SetObjAttr(const Attr: String; const Val: Variant):Boolean; virtual;
     function GetObjElement(AObj: TObject; const Index: Variant):Variant; virtual;
     function SetObjElement(AObj: TObject; const Index: Variant; Val:Variant):Boolean; virtual;
     function CallObjFunc(AObj: TObject; const Func: String; Args: array of Variant):Variant; virtual;
@@ -491,6 +496,8 @@ type
     function SetVar(const VarName: String; const Val: Variant):Boolean; override;
     function VarIsObj(const VarName: String):Boolean; override;
     function SetObjectVar(const VarName: String; JObj: TJSONObj):Boolean; override;
+    function GetObjAttr(const Attr: String):Variant; override;
+    function SetObjAttr(const Attr: String; const Val: Variant):Boolean; override;
   {$IFNDEF NO_COMPLEXOBJ}
     function EnterObj(const ObjName: String):Boolean; override;
     function LeaveObj(const ObjName: String):Boolean; override;
@@ -789,7 +796,7 @@ begin
 {$ENDIF}
 end;
 
-procedure PutObjToJSON(JObj: TJSONObj; const VarName: String; Obj: TJSONObj);
+procedure PutObjToJSON(JObj: TJSONObj; const VarName: String; Obj: TJSONLeaf);
 begin
 {$IFDEF SUPEROBJECT}
   JObj.O[VarName]:=Obj;
@@ -1167,11 +1174,19 @@ begin
 end;
 
 procedure TJSONExprParser.AddVarHelper(AHelper: TJEVarHelper);
+var
+  vh:TJEVarHelper;
 begin
   if AHelper=nil then exit;
   if VarHelper<>nil then
-    AHelper.NextHelper:=VarHelper;
-  FVarHelper:=AHelper;
+  begin
+    vh:=VarHelper;
+    while vh.NextHelper<>nil do
+      vh:=vh.NextHelper;
+    vh.NextHelper:=AHelper;
+  end
+  else
+    FVarHelper:=AHelper;
 end;
 
 function TJSONExprParser.Eval(AObj: TJSONLeaf): Variant;
@@ -1360,7 +1375,8 @@ function TJSONExprParser.Eval(AObj: TJSONLeaf): Variant;
   procedure SetVal(Z: TJSONLeaf; Val: Variant; const PName: String=JEP_Param1);
   var
     Z2:TJSONLeaf;
-    mstr:String;
+    mstr,TmpStr:String;
+    vh:TJEVarHelper;
   begin
     Result:=Val;  //将右侧表达式的值做为整个赋值过程的值
     if Z.{$IFDEF SUPEROBJECT}DataType=stString{$ELSE}ClassType=_String{$ENDIF} then
@@ -1381,19 +1397,21 @@ function TJSONExprParser.Eval(AObj: TJSONLeaf): Variant;
       {$ENDIF}
       {$ELSE}
         Z2:=TJSONObj(Z).{$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_Param1);
-        if Z2{$IFDEF SUPEROBJECT}.DataType=stString{$ELSE}is TJSONObj{$ENDIF} then
-        begin
-          with VarHelper do
-          begin
-            if EnterObj(Z2.{$IFDEF SUPEROBJECT}AsString{$ELSE}toString{$ENDIF}) then
+        if Z2{$IFDEF SUPEROBJECT}.DataType=stString{$ELSE}is _String{$ENDIF} then
+        begin   // Obj.xx := ...
+          TmpStr:=Z2.{$IFDEF SUPEROBJECT}AsString{$ELSE}toString{$ENDIF};
+          vh:=VHEnterObj(TmpStr);
+          if vh<>nil then
+            with vh do
             begin
-              SetVar(TJSONObj(Z).{$IFDEF SUPEROBJECT}GetS{$ELSE}OptString{$ENDIF}(JEP_Param2),Result);
-              LeaveObj('');
-            end;
-          end;
+              SetObjAttr(TJSONObj(Z).{$IFDEF SUPEROBJECT}GetS{$ELSE}OptString{$ENDIF}(JEP_Param2),Result);
+              LeaveObj(TmpStr);
+            end
+          else //Obj not found...
+            ;
         end
         else if Z2{$IFDEF SUPEROBJECT}.DataType=stObject{$ELSE}is TJSONObj{$ENDIF} then
-        begin
+        begin   // Obj.Prop.xxx := ...
 
         end;
       {$ENDIF}
@@ -1426,7 +1444,7 @@ function TJSONExprParser.Eval(AObj: TJSONLeaf): Variant;
     end;
   end;
 var
-  Func,mstr:String;
+  Func,mstr,TmpStr:String;
   Func1:AnsiChar;
   v1,v2,v3:Variant;
   VParams:TVarAy;
@@ -1435,6 +1453,7 @@ var
   Z,Z2:TJSONLeaf;
   ParamCnt,i,n,c,EndVal,StepVal:Integer;
   w1,w2,w3,w4,w5,w6,w7:Word;
+  vh:TJEVarHelper;
 begin
   Result:=Null;
   if AObj=nil then exit;
@@ -1547,11 +1566,17 @@ begin
             Z2:=TJSONObj(AObj).{$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_Param1);
             if Z2{$IFDEF SUPEROBJECT}.DataType=stString{$ELSE} is _String{$ENDIF} then
             begin
-              with VarHelper do
-                if EnterObj(Z2.{$IFDEF SUPEROBJECT}AsString{$ELSE}toString{$ENDIF}) then
+              TmpStr:=Z2.{$IFDEF SUPEROBJECT}AsString{$ELSE}toString{$ENDIF};
+              vh:=VHEnterObj(TmpStr);
+              if vh<>nil then
+                with vh do
                 begin
-                  Result:=GetP2;
-                  LeaveObj('');
+                  Z2:=TJSONObj(AObj).{$IFDEF SUPEROBJECT}GetO{$ELSE}Opt{$ENDIF}(JEP_Param2);
+                  if Z2{$IFDEF SUPEROBJECT}.DataType=stString{$ELSE} is _String{$ENDIF} then
+                    Result:=GetObjAttr(Z2.{$IFDEF SUPEROBJECT}AsString{$ELSE}toString{$ENDIF})
+                  else
+                    Result:=GetP2;
+                  LeaveObj(TmpStr);
                 end;
             end;
           {$ENDIF}
@@ -4530,7 +4555,17 @@ end;
 
 class function TJSONExprParser.Version: ShortString;
 begin
-  Result:='0.5.2';
+  Result:='0.5.3';
+end;
+
+function TJSONExprParser.VHEnterObj(const ObjName: String): TJEVarHelper;
+begin
+  Result:=FVarHelper;
+  while not Result.EnterObj(ObjName) do
+  begin
+    Result:=Result.NextHelper;
+    if Result=nil then exit;
+  end;  
 end;
 
 { TJEVarHelper }
@@ -4568,7 +4603,7 @@ begin
   {$IFNDEF SUPEROBJECT}J.Free{$ENDIF};
 end;
 
-function TJEVarHelper.GetObjAttr(AObj: TObject; const Attr: String): Variant;
+function TJEVarHelper.GetObjAttr(const Attr: String): Variant;
 begin
 
 end;
@@ -4656,7 +4691,7 @@ begin
   FNextHelper := Value;
 end;
 
-function TJEVarHelper.SetObjAttr(AObj: TObject; const Attr: String; Val: Variant): Boolean;
+function TJEVarHelper.SetObjAttr(const Attr: String; const Val: Variant): Boolean;
 begin
   Result:=false;
 end;
@@ -4684,7 +4719,10 @@ end;
 function TJEVarHelper.SetVar(const VarName: String;
   const Val: Variant): Boolean;
 begin
-  Result:=false;
+  if NextHelper<>nil then
+    Result:=NextHelper.SetVar(VarName,Val)
+  else
+    Result:=false;
 end;
 
 {$IFNDEF NO_RECMEMBER}
@@ -4724,7 +4762,7 @@ begin
     mstr:=VarNames[i];
     if GetVarObj(mstr,Obj) then
     begin
-      PutObjToJSON(PlainObj,mstr,Obj);
+      PutObjToJSON(PlainObj,mstr,Obj{$IFNDEF SUPEROBJECT}.Clone{$ENDIF});
     end
     else if not GetVar(mstr,v) then
       Dec(Result)
@@ -4900,6 +4938,11 @@ begin
   FValueHolder.{$IFDEF SUPEROBJECT}Delete{$ELSE}Remove{$ENDIF}(VarName){$IFNDEF SUPEROBJECT}.Free{$ENDIF};
 end;
 
+function TSimpleVarHelper.GetObjAttr(const Attr: String): Variant;
+begin
+  GetVar(Attr,Result);
+end;
+
 function TSimpleVarHelper.GetTraceOnSet: Boolean;
 begin
   Result:=FTraceOnSet;
@@ -5002,6 +5045,12 @@ end;
 procedure TSimpleVarHelper.PutNull(const VarName: String);
 begin
   FValueHolder.{$IFDEF SUPEROBJECT}PutO{$ELSE}Put{$ENDIF}(VarName,CNULL);
+end;
+
+function TSimpleVarHelper.SetObjAttr(const Attr: String;
+  const Val: Variant): Boolean;
+begin
+  Result:=SetVar(Attr,Val);
 end;
 
 function TSimpleVarHelper.SetObjectVar(const VarName: String; JObj: TJSONObj): Boolean;

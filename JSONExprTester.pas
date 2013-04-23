@@ -448,6 +448,8 @@ begin
     mstr:='A:=-10;--A;A++;-A';
     if not CheckParseText(mstr,Msg,AParser) then Result:=false;
     {$IFNDEF SUPEROBJECT}Free;{$ENDIF}
+    if Result then
+      Msg:=Msg+#13#10'Parse test OK.';
   end;
   //Eval Test
   VHelper.Clean;
@@ -554,6 +556,10 @@ begin
     TestScriptVal('A:=((1,10),2,4,8); B:=A[3-2-1,1];',10);
     //collection and array test
     TestScriptVal('C:=(1,1+2); a:=(20,1+1); PRINT(1+a[1]); IIF((1+a[1]) in C, a[0]-(C[1]*2), -a[1])',14);
+    //2013-04-22  Prop test.
+    TestScriptVal('P.X:=10;P.Y:=9-P.X/2; S:=P.((X+2)*Y)',48);
+    //2013-04-23  中文变量
+    TestScriptVal('上证:=12345679; 深成:=上证*9',111111111);
     //Eval test
     TestScriptVal('A:=''99'';Eval(''10''+A+''.0-100+2'');',1001);
     // ?= test
@@ -596,6 +602,8 @@ begin
     if DebugMsg<>'' then
       Msg:=Msg+#13#10'Debug Message:'#13#10+DebugMsg;
     {$IFDEF SUPEROBJECT}J:=nil{$ELSE}J.Free{$ENDIF};
+    if Result then
+      Msg:=Msg+#13#10'Eval test OK.';
     DebugMsg:='';
     BasicJEPC:=TJEParser.GetParserForLan('Basic');
     if BasicJEPC<>nil then
