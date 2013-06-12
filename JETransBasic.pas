@@ -703,9 +703,11 @@ function TJEBasicParser.StdMakeBlock(const Str, IdentStr: String;
   NoHeadIdent: Boolean): String;
 begin
   if NoHeadIdent then
-    Result:=#13#10+IdentStr+Str
-  else
     Result:=#13#10+Str
+  else if Str<>'' then
+    Result:=#13#10+Str
+  else
+    Result:=#13#10;
 end;
 
 function TJEBasicParser.StdMakeElseEnd(IsElse: Boolean;
@@ -1384,6 +1386,7 @@ begin
   FAddAsStrJoin:=true;
   FFuncNameAsResult:=true;
   FSessionVarName:='SESSION';
+  FRequestVarName:='REQUEST';
   BASKW_AS:=RegKeyword('AS');
   BASKW_BYREF:=RegKeyword('BYREF');
   BASKW_BYVAL:=RegKeyword('BYVAL');
@@ -1741,6 +1744,7 @@ Loop [{While | Until} condition]
   if idx2<0 then
   begin
     ExpectKW;
+    idx:=CurToken.KWIdx1-1;  //2013-06-10
     if (idx=BASKW_WHILE) or (idx=BASKW_UNTIL) then
     begin
       if idx=BASKW_WHILE then
@@ -1749,6 +1753,7 @@ Loop [{While | Until} condition]
     end
     else
       PrintErr('Expect "WHILE" or "UNTIL" here.');
+    GoNextStatementParam;  //2013-06-10
     if ParseExpr<0 {ParseStatements(true)<0} then
     begin
       PrintErr('Expect expression here.');
@@ -2211,7 +2216,7 @@ end;
 
 function TJEBasicParser.ParseParameterDef: Integer;
 var
-  mstr:String;
+  mstr,ParameterName:String;
 begin
   Result:=-1;
   while CurToken.Kind=tkWORD do
@@ -2223,10 +2228,12 @@ begin
       NextToken;
       PrintErr('Perfix '+mstr+' ignored...');
     end;
-    if ParseIdentifier='' then
+    ParameterName:=ParseIdentifier;
+    if ParameterName='' then
       PrintErr('Except identifier here.')
-    else if Result<0 then         
+    else if Result<0 then
       Result:=FCurNodeLevel;
+    Self.RegUserVar(ParameterName);  //2013-06-10
     if CurToken.Token<>',' then break;
     GoNextParam;
     NextToken;
