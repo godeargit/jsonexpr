@@ -1097,11 +1097,11 @@ begin
     begin
       if Op='ONERROR' then
       begin
-        Result:=IdentLen(Ident)+'On Error';
+        Result:=IdentLen(Ident); //+'On Error';
         if JObj.Opt(JEP_Param1)=CNULL then
-          Result:=Result+' Resume Next'
-        else
-          Result:=Result+' Goto '+TransANode(JObj.Opt(JEP_Param1),0);
+          Result:=Result+'error_reporting(E_ALL ^ E_NOTICE)'  //' Resume Next'
+        else  //报告运行时错误
+          Result:=Result+'error_reporting(E_ERROR | E_WARNING | E_PARSE)';  //' Goto '+TransANode(JObj.Opt(JEP_Param1),0);
         exit;
       end;
     end;
@@ -1369,6 +1369,11 @@ begin
     Result:='$'+FSessionVarName;
     exit;
   end;
+  if Use_Request and (VarName=JEP_Request) then
+  begin
+    Result:='$'+FRequestVarName;
+    exit;
+  end;
   Result:=VarName;
   if (FConsts.IndexOf(VarName)<0) and not FInDefId then
     Result:='$'+VarName;
@@ -1458,9 +1463,11 @@ begin
   FSetValOp:='=';
   FEqualOp:='==';
   FNotEqualOp:='<>';
+  FMemberCallOp:='->';
   FStrCh:=['"',''''];
   FPascalTypeStr:=true;
   FSessionVarName:='_SESSION';
+  FRequestVarName:='_REQUEST';
   PHPKW_AS:=RegKeyword('AS');
   PHPKW_CASE:=RegKeyword('PHPKW_CASE');
   PHPKW_CLASS:=RegHeadKeywordMethod('CLASS',ParseClass);

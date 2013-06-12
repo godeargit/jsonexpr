@@ -660,6 +660,12 @@ begin
         begin
           CheckLanTrans(ABasicParser,APhpJEParser,'A=1 ''A <= 1','<?php $A=1; //A <= 1'#13#10'?>');
         end;
+        if Use_Request then  //2013-03-29
+        begin
+          CheckLanTrans(ABasicParser,APhpJEParser,'id=Request("id")','<?php $id=$_REQUEST[''id'']; ?>');
+        end;
+        CheckLanTrans(ABasicParser,APhpJEParser,'s.Foo(0):s(1)=2*s(2)','<?php $s->Foo(0);$s[1]=2*$s[2]; ?>');  //2013-06-12
+        CheckLanTrans(ABasicParser,APhpJEParser,'App("Name")=3','<?php $App[''Name'']=3; ?>');  //2013-06-12
         if Result then
           Msg:=Msg+#13#10'Basic->PHP OK!';
         APhpJEParser.Free;

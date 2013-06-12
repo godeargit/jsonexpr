@@ -251,7 +251,8 @@ type
     FDefLevels: TStrings;  //Strings:类型  Objects:Level
     FCurNodeLevel, FCurBlockCount, FStatementLevel: Integer;
     FFuncWithoutBracket: Boolean;
-    FSessionVarName: String;
+    FSessionVarName, FRequestVarName: String;
+    FMemberCallOp: String;
     FUserSymbols: TStringList;
     function RegKeyword(const AWord: String; KWTag: TKeywordTags=[]):Integer;
     { 无返回值的头关键字 }
@@ -395,6 +396,10 @@ type
     { 对于只有一个标识符的语句，将其转化为方法调用，而不是任其以变量的形式存在 }
     procedure TryTransOneWordStatement;
     function LnBreakBeforeRawText:Boolean; virtual;
+    { 将当前的变量名保存为局部变量 }
+    function TryRegLocalVar:Boolean;
+    { 将函数转化为数组（对于函数和数组不分的语言，需要这样处理） }
+    function TryFuncToArray:Boolean;
   private
     FIdent: String;
     FTreeBaseLan: String;
@@ -601,6 +606,7 @@ const
 var
   ErrPrint:TPrintFunc;
   Use_Session:Boolean=true;   //2013-03-29
+  Use_Request:Boolean=true;   //2013-06-11
 
 function DblQuotedStr(const S: String): String;
 function FastPos(const aSourceString,aFindString:String;const aSourceLen,aFindLen,StartPos:Integer):Integer;
@@ -610,6 +616,7 @@ function NewFuncObj(const AFunc: String): TJEBranch;
 function ExtractVarInSetValue(AObj: TJEBranch): TJENode;
 function IsConstNumber(ANode: TJENode; out Val: Double):Boolean;
 function MakeOpExpr(const OpStr: String; Var1, Var2: TJENode):TJEBranch;
+function CharReplace(const Text: String; AChar: Char; const NewStr: String):String;
 
 implementation
 
@@ -888,6 +895,48 @@ begin
       if Copy(Str,StartPos,n)=mstr then exit;      
     end;
   Result:=-1;
+end;
+
+function CharReplace(const Text: String; AChar: Char; const NewStr: String):String;
+var
+  i,n:Integer;
+  ch:Char;
+begin
+  i:=Length(NewStr);
+  if i>1 then
+  begin
+    Result:='';
+    for i:=1 to Length(Text) do
+    begin
+      ch:=Text[i];
+      if ch=AChar then
+        Result:=Result+NewStr
+      else
+        Result:=Result+ch;
+    end;
+  end
+  else if i=1 then
+  begin
+    ch:=NewStr[1];
+    n:=Length(Text);
+    Result:=Copy(Text,1,n);
+    for i:=1 to n do
+    begin
+      if Result[i]=AChar then
+        Result[i]:=ch;
+    end;
+  end
+  else //New=''
+  begin
+    n:=Length(Text);
+    Result:=Copy(Text,1,n);
+    for i:=1 to n do
+    begin
+      ch:=Text[i];
+      if ch<>AChar then
+        Result:=Result+ch;
+    end;
+  end;
 end;
 
 { TJEParser }
@@ -1908,6 +1957,11 @@ begin
       begin
         Result:=jetArray;  //Session as array?
       end;
+    if Use_Request then  //2013-06-11
+      if NameEqual(AName,FRequestVarName) then
+      begin
+        Result:=jetArray;  //Request as array?
+      end;
     exit;
   end;
   with PJETypeRec(FUserSymbols.Objects[i])^ do
@@ -2909,11 +2963,62 @@ begin
     Result:=Trans_OneParamDef(JObj);
 end;
 
+function TJEParser.TryFuncToArray: Boolean;
+var
+  J,JN,JN2:TJENode;
+  n,i:Integer;
+begin
+  if FLevelNodes[FCurNodeLevel].OpKind=jokFunc then
+  begin
+    J:=FLevelNodes[FCurNodeLevel].Obj;
+    if J is TJEBranch then
+    begin
+      //不创建新对象，在原对象上先Remove后Put，逐个挪动，保持原有次序
+      with TJEBranch(J) do
+      begin
+        n:=Length;
+        JN:=Remove(JEP_Operator);
+        Put(JEP_Operator,'[');
+        for i:=1 to n do
+        begin
+          if i<n then JN2:=Remove(JEP_ParamHeader+IntToStr(i));
+          Put(JEP_ParamHeader+IntToStr(i),JN);
+          JN:=JN2;
+        end;
+      end;
+      FLevelNodes[FCurNodeLevel].OpKind:=jokOp;
+    end;
+  end;
+end;
+
 function TJEParser.TryParseStatements(InOneLine, ForceFill: Boolean): Boolean;
 begin
   Result:=ParseStatements(InOneLine)>=0;
   if Result then exit;
   PushNull;
+end;
+
+function TJEParser.TryRegLocalVar: Boolean;
+var
+  n:Integer;
+  mstr:String;
+  Node:TJENode;
+begin
+  Result:=false;
+  with FLevelNodes[FCurNodeLevel] do
+  begin
+    if OpKind in [jokVal,jokNone] then
+    begin
+      Node:=Obj;
+      if Node is _String then
+        mstr:=_String(Node).AsString
+      else
+        exit;
+      if mstr='' then exit;
+      Self.RegUserVar(mstr);
+      Result:=true;
+    end;
+  end;
 end;
 
 procedure TJEParser.TryTransOneWordStatement;
@@ -2973,6 +3078,11 @@ begin
   if Use_Session and (VarName=JEP_Session) then  //2013-03-29
   begin
     Result:=FSessionVarName;
+    exit;
+  end;
+  if Use_Request and (VarName=JEP_Request) then  //2013-06-11
+  begin
+    Result:=FRequestVarName;
     exit;
   end;
   if not IsNormalVarName(VarName) then  //2010-04-02
@@ -3804,6 +3914,7 @@ begin
   FSetValOp:=':=';
   FEqualOp:='=';
   FNotEqualOp:='<>';
+  FMemberCallOp:='.';
 end;
 
 class function TJEParser.LanCount: Integer;
@@ -4581,6 +4692,11 @@ begin
       begin
         if FSEEqual and (StrVal=FEqualOp) then
         begin
+          //2013-06-11 对赋值语句左部可能混淆的函数进行处理。 如： App("12")=3
+          if FArrayUseFuncBracket then
+          begin
+            TryFuncToArray;
+          end;
           PushOp2(':=',GetOpRank(StrVal));
           NextToken;
           //增加括号层次，以处理形如 b = b1 and b2 = b3 的表达式
@@ -4619,7 +4735,7 @@ begin
                 else
                   continue;
               end
-              else if CurToken.Kind in LineBreakKinds then
+              else if CurToken.Kind in LineBreakKinds+[tkComment] then  //2013-06-10  Add tkComment
                 continue
               else if CurToken.Kind=tkRawText then  //2012-12-25  tkRawText
               begin
@@ -4666,7 +4782,7 @@ begin
             else
               continue;
           end
-          else if CurToken.Kind in LineBreakKinds then
+          else if CurToken.Kind in LineBreakKinds+[tkComment] then  //2013-06-10  Add tkComment
             continue;               
         end;
         exit;
@@ -5227,7 +5343,7 @@ var
   IsEmpty:Boolean;
   i,n:Integer;
   Z,Z2:TZAbstractObject;
-  J,JP,JN:JSONObject;
+  J,JP,JN:TJEBranch;
   mstr:String;
   AClass:TClass;
   label CommonCase;
@@ -5300,8 +5416,9 @@ begin
 CommonCase:
   //2012-06-05  考虑class内部 MEMBERS 数组的情况
   if FLevelNodes[FCurNodeLevel].OpKind=jokItems then exit;  
-  J:=JSONObject(FLevelNodes[FCurNodeLevel].Obj);
-  if J=nil then exit; 
+  J:=TJEBranch(FLevelNodes[FCurNodeLevel].Obj);
+  if J=nil then exit;
+  if J.ClassType<>TJEBranch then exit;  //2013-06-11
   IsEmpty:=false;
   if (FLevelNodes[FCurNodeLevel].OpKind=jokNone) then
   begin
@@ -5416,6 +5533,9 @@ begin
   end;
   OpStr:=Op;
   if not GetOpInfo(OpStr,IsOp2,R) then exit;
+  //2013-06-11
+  if OpStr=FMemberCallOp then
+    TryRegLocalVar;
   if IsOp2 then
     PushOp2(OpStr,R)
   else
@@ -5932,6 +6052,8 @@ var
 begin
   if Use_Session and NameEqual(VarStr,FSessionVarName) then
     StdNameStr:=JEP_Session
+  else if Use_Request and NameEqual(VarStr,FRequestVarName) then  //2013-06-11
+    StdNameStr:=JEP_Request
   else
     StdNameStr:=VarStr;
   e:=GetExprLevel;

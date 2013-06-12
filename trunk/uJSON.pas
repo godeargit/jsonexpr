@@ -1308,13 +1308,11 @@ function JSONObject.getInt(const key: string): integer;
 var
   o: TZAbstractObject;
 begin
-        o:=get(key);
-        if (o is _Number) then begin
-           Result:= _Number(o).intValue();
-        end else begin
-           Result:= Round(getDouble(key));
-        end;
-       
+  o:=get(key);
+  if (o is _Number) then
+    Result:= _Number(o).intValue()
+  else
+    Result:= Round(getDouble(key));
 end;
 
 
@@ -1331,12 +1329,11 @@ var
  o: TZAbstractObject;
 begin
   o:=get(key);
-  if (o is JSONArray) then begin
-      Result:=JSONArray(o);
-  end else begin
+  if (o is JSONArray) then
+    Result:=JSONArray(o)
+  else
     raise  NoSuchElementException.create('JSONObject[' +
         quote(key) + '] is not a JSONArray.');
-  end;
 end;
 
 
@@ -1353,12 +1350,11 @@ var
  o: TZAbstractObject;
 begin
   o:=get(key);
-  if (o is JSONObject) then begin
-      Result:=JSONObject(o);
-  end else begin
+  if (o is JSONObject) then
+    Result:=JSONObject(o)
+  else
     raise NoSuchElementException.create('JSONObject[' +
-        quote(key) + '] is not a JSONObject.');
-  end;
+      quote(key) + '] is not a JSONObject.');
 end;
 
 
@@ -1395,7 +1391,7 @@ end;
      *)
 function JSONObject.isNull(const key: string): boolean;
 begin
-   Result:=NULL.equals(opt(key));
+  Result:=NULL.equals(opt(key));
 end;
 
 function JSONObject.keys: TStringList;
@@ -1403,9 +1399,8 @@ var
  i: integer;
 begin
   Result:=TStringList.Create;
-  for i:=0 to myHashMap.Count -1 do begin
+  for i:=0 to myHashMap.Count -1 do
     Result.add (myHashMap[i]);
-  end;
 end;
 
 function JSONObject.length: integer;
@@ -1422,34 +1417,32 @@ end;
      *)
 function JSONObject.names: JSONArray;
 var
-  ja :JSONArray;
-  i: integer;
+  i,c: integer;
   k: TStringList;
 begin
-    ja:=JSONArray.create;
-    k:=keys;
-    try
-      for i:=0 to k.Count -1 do begin
-        ja.put (_String.create (k[i]));
-      end;
-      if (ja.length = 0) then begin
-         Result:=nil;
-      end else begin
-         Result:=ja;
-      end;
-    finally
-      k.free;
+  Result:=nil;
+  k:=keys;
+  try
+    c:=k.Count;
+    if c>0 then  //2013-05-04  Fix memory leak bug found by K.o.s
+    begin
+      Result:=JSONArray.create;
+      for i:=0 to c-1 do
+        Result.put(_String.create(k[i]));
     end;
+  finally
+    k.free;
+  end;
 end;
 
 class function JSONObject.numberToString(n: _Number): string;
 begin
-   if (n = nil) then
-     Result:=''
-   else if (n is _Integer) then
-     Result:=IntToStr(n.intValue)
-   else
-     Result:=FloatToStr (n.doubleValue, getFormatSettings());
+  if (n = nil) then
+    Result:=''
+  else if (n is _Integer) then
+    Result:=IntToStr(n.intValue)
+  else
+    Result:=FloatToStr(n.doubleValue, getFormatSettings());
 end;
 
 
@@ -1493,7 +1486,7 @@ end;
      *)
 function JSONObject.optBoolean(const key: string): boolean;
 begin
-  Result:=optBoolean (key, false);
+  Result:=optBoolean(key, false);
 end;
 
 
@@ -1565,22 +1558,26 @@ function JSONObject.optDouble(const key: string; defaultValue: double): double;
 var
  o: TZAbstractObject;
 begin
-    o:=opt(key);
-    if (o <> nil) then begin
-        if (o is _Number) then begin
-            Result:=(_Number(o)).doubleValue();
-            exit;
-        end  ;
-        try
-            Result:=_Double.create(_String(o)).doubleValue();
-            exit;
-          except on e:Exception  do begin
-            Result:=defaultValue;
-            exit;
-          end;
-        end;
+  o:=opt(key);
+  if (o <> nil) then
+  begin
+    if (o is _Number) then
+    begin
+      Result:=(_Number(o)).doubleValue();
+      exit;
     end;
-    Result:=defaultValue;
+    try
+      Result:=_Double.create(_String(o)).doubleValue();
+      exit;
+    except
+      on e:Exception do
+      begin
+        Result:=defaultValue;
+        exit;
+      end;
+    end;
+  end;
+  Result:=defaultValue;
 end;
 
 (**
@@ -1594,7 +1591,7 @@ end;
      *)
 function JSONObject.optInt(const key: string): integer;
 begin
-  Result:=optInt (key, 0);
+  Result:=optInt(key, 0);
 end;
 
 
@@ -1617,7 +1614,7 @@ begin
   begin
     if (o is _Number) then
     begin
-      Result:= (_Number(o)).intValue();
+      Result:=(_Number(o)).intValue();
       exit;
     end;
     try
@@ -1656,12 +1653,11 @@ function JSONObject.optJSONArray(const key: string): JSONArray;
 var
  o: TZAbstractObject ;
 begin
-    o:=opt(key);
-    if (o is JSONArray) then begin
-      Result:=JSONArray(o);
-    end else begin
-      Result:=nil;
-    end;
+  o:=opt(key);
+  if (o is JSONArray) then
+    Result:=JSONArray(o)
+  else
+    Result:=nil;
 end;
 
 
@@ -1984,18 +1980,16 @@ end;
      *)
 function JSONObject.toJSONArray(names: JSONArray): JSONArray;
 var
- i: integer;
- ja: JSONArray ;
+  i: integer;
 begin
-  if ((names = nil) or (names.length() = 0)) then begin
-      Result:=nil;
-      exit;
+  if ((names = nil) or (names.length() = 0)) then
+  begin
+    Result:=nil;
+    exit;
   end;
-   ja:=JSONArray.create;
-  for i:=0 to names.length -1 {; i < names.length(); i += 1)} do begin
-      ja.put(self.opt(names.getString(i)));
-  end;
-  Result:=ja;
+  Result:=JSONArray.create;
+  for i:=0 to names.length -1 do
+    Result.put(self.opt(names.getString(i)));
 end;
 
 
@@ -2234,7 +2228,7 @@ end;
 
 function JSONObject.Clone: TZAbstractObject;
 begin
-  Result:=JSONObject.create (self.toString());
+  Result:=JSONObject.create(self.toString());
 end;
 
 function JSONObject.GetPropValues(const Key: String): String;
@@ -2647,20 +2641,18 @@ end;
 
 function _Boolean.toString: string;
 begin
-  if fvalue then begin
-    Result:='true';
-  end else begin
+  if fvalue then
+    Result:='true'
+  else
     Result:='false';
-  end;
 end;
 
 class function _Boolean.valueOf(b: boolean): _Boolean;
 begin
-  if (b) then begin
-    Result:=_TRUE;
-  end else begin
+  if (b) then
+    Result:=_TRUE
+  else
     Result:=_FALSE;
-  end;
 end;
 
 class function _Boolean._FALSE: _Boolean;
@@ -2727,12 +2719,12 @@ end;
 
 function _Integer.Clone: TZAbstractObject;
 begin
-  Result:=_Integer.create (self.fvalue);
+  Result:=_Integer.create(self.fvalue);
 end;
 
 constructor _Integer.create(const s: string);
 begin
-  fvalue:=strToInt (s);
+  fvalue:=strToInt(s);
 end;
 
 function _Integer.doubleValue: double;
@@ -2751,14 +2743,14 @@ class function _Integer.parseInt(const s: string; i: integer): integer;
 begin
   Result:=0;  //By creation_zy
   case i of
-    10: Result:=strToInt (s);
-    16: Result:=hexToInt (s);
+    10: Result:=strToInt(s);
+    16: Result:=hexToInt(s);
     8:
     begin
       if s='0' then exit;  //By creation_zy
-      newNotImplmentedFeature () ;
+      newNotImplmentedFeature() ;
     end;
-    else newNotImplmentedFeature () ;  //By creation_zy
+    else newNotImplmentedFeature() ;  //By creation_zy
   end;
 end;
 
@@ -2766,7 +2758,7 @@ end;
 
 class function _Integer.parseInt(s: _String): integer;
 begin
-  Result:=_Integer.parseInt (s.toString, 10);
+  Result:=_Integer.parseInt(s.toString, 10);
 end;
 
 class function _Integer.toHexString(c: char): string;
@@ -2776,7 +2768,7 @@ end;
 
 function _Integer.toString: string;
 begin
-  Result:=intToStr (fvalue);
+  Result:=intToStr(fvalue);
 end;
 
 
@@ -2784,7 +2776,7 @@ end;
 
 constructor _Double.create(const s: string);
 begin
-  fvalue:=StrToFloat (s, getFormatSettings);
+  fvalue:=StrToFloat(s, getFormatSettings);
 end;
 
 constructor _Double.create(s: _String);
@@ -2795,7 +2787,7 @@ end;
 
 function _Double.Clone: TZAbstractObject;
 begin
-  Result:=_Double.create (Self.fvalue);
+  Result:=_Double.create(Self.fvalue);
 end;
 
 constructor _Double.create(d: double);
@@ -2810,7 +2802,7 @@ end;
 
 function _Double.intValue: integer;
 begin
-  Result:=trunc (fvalue);
+  Result:=trunc(fvalue);
 end;
 
 class function _Double.NaN: double;
@@ -2820,7 +2812,7 @@ end;
 
 function _Double.toString: string;
 begin
-  Result:=floatToStr (fvalue, getFormatSettings);
+  Result:=floatToStr(fvalue, getFormatSettings);
 end;
 
 { JSONArray }
@@ -2977,10 +2969,9 @@ var
   o: TZAbstractObject;
 begin
   o:=opt(index);
-  if (o = nil) then begin
-      raise NoSuchElementException.create('JSONArray[' + intToStr(index)
-        + '] not found.');
-  end ;
+  if (o = nil) then
+    raise NoSuchElementException.create('JSONArray[' + intToStr(index)
+      + '] not found.');
   Result:=o;
 end;
 
@@ -3029,18 +3020,20 @@ var
   d: _Double;
 begin
   o:=get(index);
-  if (o is _Number) then begin
-      Result:=(_Number(o)).doubleValue();
-      exit;
+  if (o is _Number) then
+  begin
+    Result:=(_Number(o)).doubleValue();
+    exit;
   end;
-  if (o is _String) then begin
-      d:= _Double.create(_String(o));
-      try
-       Result:=d.doubleValue();
-       exit;
-      finally
-       d.Free;
-      end; 
+  if (o is _String) then
+  begin
+    d:= _Double.create(_String(o));
+    try
+      Result:=d.doubleValue();
+      exit;
+    finally
+      d.Free;
+    end;
   end;
   raise NumberFormatException.create('JSONObject['
      + intToStr(index) + '] is not a number.');
@@ -3061,11 +3054,10 @@ var
   o: TZAbstractObject;
 begin
   o:=get(index);
-  if (o is _Number) then begin
-    Result:=_Number(o).intValue();
-  end else begin
-    Result:=trunc (getDouble (index));
-  end;
+  if (o is _Number) then
+    Result:=_Number(o).intValue()
+  else
+    Result:=trunc(getDouble(index));
 end;
 
 
@@ -3081,12 +3073,13 @@ var
  o: TZAbstractObject;
 begin
   o:=get(index);
-  if (o is JSONArray) then begin
-      Result:=JSONArray(o);
-      exit;
+  if (o is JSONArray) then
+  begin
+    Result:=JSONArray(o);
+    exit;
   end;
   raise NoSuchElementException.create('JSONArray[' + intToStr(index) +
-          '] is not a JSONArray.');
+    '] is not a JSONArray.');
 end;
 
 
@@ -3103,16 +3096,15 @@ var
   s: string;
 begin
   o:=get(index);
-  if (o is JSONObject) then begin
-      Result:=JSONObject(o);
-  end else begin
-      if o <> nil then begin
-        s:=o.ClassName;
-      end else begin
-        s:='nil';
-      end;
-      raise NoSuchElementException.create('JSONArray[' + intToStr(index) +
-        '] is not a JSONObject is ' + s);
+  if (o is JSONObject) then
+    Result:=JSONObject(o)
+  else begin
+    if o <> nil then
+      s:=o.ClassName
+    else
+      s:='nil';
+    raise NoSuchElementException.create('JSONArray[' + intToStr(index) +
+      '] is not a JSONObject is ' + s);
   end;
 end;
 
@@ -3153,15 +3145,15 @@ var
   len, i: integer;
   sb: string ;
 begin
-		len:=length();
-    sb:='';
-    for i:=0 to len -1 do begin
-        if (i > 0) then begin
-            sb:=sb + separator;
-        end;
-        sb:= sb + JSONObject.valueToString(TZAbstractObject( myArrayList[i]));
-    end;
-    Result:=sb;
+  len:=length();
+  sb:='';
+  for i:=0 to len -1 do
+  begin
+    if (i > 0) then
+      sb:=sb + separator;
+    sb:= sb + JSONObject.valueToString(TZAbstractObject(myArrayList[i]));
+  end;
+  Result:=sb;
 end;
 
 function JSONArray.LastItem: TZAbstractObject;
@@ -3182,7 +3174,7 @@ end;
  *)
 function JSONArray.length: integer;
 begin
-  Result:=myArrayList.Count ;
+  Result:=myArrayList.Count;
 end;
 
  (**
@@ -3193,11 +3185,10 @@ end;
      *)
 function JSONArray.opt(index: integer): TZAbstractObject;
 begin
-    if ((index < 0) or (index >= length()) ) then begin
-       Result:=nil;
-    end else begin
-      Result:=TZAbstractObject (myArrayList[index]);
-    end;
+  if ((index < 0) or (index >= length()) ) then
+    Result:=nil
+  else
+    Result:=TZAbstractObject (myArrayList[index]);
 end;
 
 (**
@@ -3228,18 +3219,20 @@ var
  o: TZAbstractObject;
 begin
   o:=opt(index);
-  if (o <> nil) then begin
-      if ((o.equals(_Boolean._FALSE) or
-              ((o is _String) and
-              (_String(o)).equalsIgnoreCase('false')))) then begin
-          Result:=false;
-          exit;
-      end else if ((o.equals(_Boolean._TRUE) or
-              ((o is _String) and
-              (_String(o)).equalsIgnoreCase('true')))) then begin
-          Result:=true;
-          exit;
-      end;
+  if (o <> nil) then
+  begin
+    if ((o.equals(_Boolean._FALSE) or
+            ((o is _String) and
+            (_String(o)).equalsIgnoreCase('false')))) then begin
+        Result:=false;
+        exit;
+    end
+    else if ((o.equals(_Boolean._TRUE) or
+            ((o is _String) and
+            (_String(o)).equalsIgnoreCase('true')))) then begin
+        Result:=true;
+        exit;
+    end;
   end;
   Result:=defaultValue;
 end;
@@ -3255,7 +3248,7 @@ end;
  *)
 function JSONArray.optDouble(index: integer): double;
 begin
-   Result:=optDouble(index, _Double.NaN);
+  Result:=optDouble(index, _Double.NaN);
 end;
 
 (**
@@ -3327,7 +3320,7 @@ begin
   begin
     if (o is _Number) then
     begin
-      Result:= (_Number(o)).intValue();
+      Result:=(_Number(o)).intValue();
       exit; //By creation_zy
     end;
     try
@@ -3356,11 +3349,10 @@ var
  o: TZAbstractObject;
 begin
   o:=opt(index);
-  if (o is JSONArray) then begin
-    Result:=JSONArray (o) ;
-  end else begin
+  if (o is JSONArray) then
+    Result:=JSONArray(o)
+  else
     Result:=nil;
-  end;
 end;
 
 (**
@@ -3377,7 +3369,7 @@ var
 begin
   o:=opt(index);
   if o is JSONObject then
-    Result:=JSONObject (o)
+    Result:=JSONObject(o)
   else
     Result:=nil;
 end;
@@ -3421,11 +3413,10 @@ var
   o: TZAbstractObject;
 begin
   o:=opt(index);
-  if (o <> nil) then begin
-    Result:=o.toString();
-  end else begin
+  if (o <> nil) then
+    Result:=o.toString()
+  else
     Result:=defaultValue;
-  end;
 end;
 
 (**
@@ -3569,7 +3560,6 @@ end;
  *)
 function JSONArray.toJSONObject(names :JSONArray): JSONObject;
 var
-  jo: JSONObject ;
   i: integer;
 begin
   if ((names = nil) or (names.length() = 0) or (length() = 0)) then
@@ -3577,11 +3567,9 @@ begin
     Result:=nil;
     exit;  //By creation_zy
   end;
-  jo:=JSONObject.create();
-  for i:=0 to names.length() do begin
-      jo.put(names.getString(i), self.opt(i));
-  end;
-  Result:=jo;
+  Result:=JSONObject.create();
+  for i:=0 to names.length() do
+    Result.put(names.getString(i), self.opt(i));
 end;
 
 
@@ -3671,11 +3659,10 @@ end;
 
 function _NULL.Equals(const Value: TZAbstractObject): Boolean;
 begin
-  if (value = nil) then begin
-    Result:=true;
-  end else begin
-    Result:=(value is _NULL) ;
-  end;
+  if (value = nil) then
+    Result:=true
+  else
+    Result:=(value is _NULL);
 end;
 
 function _NULL.toString: string;

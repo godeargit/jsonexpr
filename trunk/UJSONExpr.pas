@@ -174,6 +174,10 @@ ver 0.5.2  By creation_zy
 2013-04-23
 ver 0.5.3  By creation_zy
   Fix bugs on object attr access.
+
+2013-06-12
+ver 0.5.4  By creation_zy
+  Add stop/continue @ time limit (in cycle statememts).
 }
 
 unit UJSONExpr;
@@ -280,6 +284,7 @@ const
   JEV_Result='RESULT';          //返回值(变量)
   JEV_ResultRep='ResulT';       //用于代换的 返回值(变量)
   JEP_Session='Session';        //Web脚本中的会话对象
+  JEP_Request='Request';        //Web脚本中的请求对象
   //
   JEH_LineRem='//';             //单行注释
   JEH_DocRem='///';             //文档注释
@@ -312,6 +317,7 @@ type
   TTraceValueFunc=procedure (Sender: TObject; const VarName: String; const Val: Variant);
   TVarToStrDefFunc=function (v: Variant; const ADefault: String): String;
   TPrintFunc=procedure (const Str: String);
+  TConfirmFunc=function (const Str: String):Boolean;
   TExprType=(etEmpty, etNumber, etBool, etString, etMixed);
   TJEVarHelper=class;
   TJEFuncHelper=class;
@@ -335,6 +341,9 @@ type
     FUseVarHelperOnTextGen: Boolean;
     FUseVarHelperOnParse: Boolean;
     FEchoFunc: TPrintFunc;
+    FConfirmFunc: TConfirmFunc;
+    FTimeLimitConfirm: Integer;
+    FStartEvalTime, FLastConfirmTime: TDateTime;
     procedure SetOnLineComplete(const Value: TTraceLineFunc);
     procedure SetTraceOnLine(const Value: Boolean);
     procedure SetPrintFunc(const Value: TPrintFunc);
@@ -345,6 +354,9 @@ type
     procedure SetEchoFunc(const Value: TPrintFunc);
     function TypeStrToVar(const Str: String):Variant;
     function VHEnterObj(const ObjName: String):TJEVarHelper;
+    procedure SetConfirmFunc(const Value: TConfirmFunc);
+    procedure SetTimeLimitConfirm(const Value: Integer);
+    function CheckTimeLimit:Boolean;
   public
     property VarHelper: TJEVarHelper read FVarHelper;
     property FuncHelper: TJEFuncHelper read FFuncHelper;
@@ -359,8 +371,11 @@ type
     property VarToStrDefFunc:TVarToStrDefFunc read FVarToStrDefFunc write SetVarToStrDefFunc;
     property PrintFunc:TPrintFunc read FPrintFunc write SetPrintFunc;
     property EchoFunc:TPrintFunc read FEchoFunc write SetEchoFunc;
+    property ConfirmFunc:TConfirmFunc read FConfirmFunc write SetConfirmFunc;
+    property TimeLimitConfirm:Integer read FTimeLimitConfirm write SetTimeLimitConfirm;
     function Eval(AObj: TJSONLeaf):Variant;
     function EvalNumber(AObj: TJSONLeaf; out Val:Double):Boolean;
+    procedure InitForEval(EnableTimeLimit: Boolean);
     function OptimizeJSON(AObj: TJSONObj):TJSONObj;
     procedure AddVarHelper(AHelper: TJEVarHelper);
     procedure AddFuncHelper(AHelper: TJEFuncHelper);
@@ -1189,6 +1204,27 @@ begin
     FVarHelper:=AHelper;
 end;
 
+function TJSONExprParser.CheckTimeLimit: Boolean;
+var
+  ms:Double;
+begin
+  if (FTimeLimitConfirm>0) and (FStartEvalTime<>0) then
+  begin
+    if FLastConfirmTime=0 then FLastConfirmTime:=FStartEvalTime;
+    ms:=(Now-FLastConfirmTime)*86400000;
+    if ms>=FTimeLimitConfirm then
+      if Assigned(FConfirmFunc) then
+      begin
+        if FConfirmFunc('Reach time limit ('+Format('%.2f',[ms*0.001])+' sec).'#13#10'Stop or continue?  (Yes = Stop)') then
+          raise TExitException.CreateVal(ms)
+        else
+          FLastConfirmTime:=Now;
+      end
+      else
+        raise TExitException.CreateVal(ms);
+  end;
+end;
+
 function TJSONExprParser.Eval(AObj: TJSONLeaf): Variant;
   function GetP1:Variant;
   begin
@@ -1872,6 +1908,8 @@ begin
                         raise TContinueException.Create(e.Level-1);
                     end;
                   end;
+                  if (FTimeLimitConfirm>0) and (FStartEvalTime<>0) then
+                    CheckTimeLimit;
                   GetP3;    // Inc(i)
                 end;
               except
@@ -2086,6 +2124,8 @@ begin
                         continue;
                     end;
                   end;
+                  if (FTimeLimitConfirm>0) and (FStartEvalTime<>0) then
+                    CheckTimeLimit;
                 until not VarEqual(GetP2,true);
               except
                 on e:TExitException do
@@ -2175,6 +2215,8 @@ begin
                         raise TContinueException.Create(e.Level-1);
                     end;
                   end;
+                  if (FTimeLimitConfirm>0) and (FStartEvalTime<>0) then
+                    CheckTimeLimit;
                   IncVal(Z,StepVal);
                   v1:=Eval(Z);
                 end;
@@ -2225,6 +2267,8 @@ begin
                         continue;
                     end;
                   end;
+                  if (FTimeLimitConfirm>0) and (FStartEvalTime<>0) then
+                    CheckTimeLimit;
                 end;
               except
                 on e:TExitException do
@@ -2258,6 +2302,8 @@ begin
                         continue;
                     end;
                   end;
+                  if (FTimeLimitConfirm>0) and (FStartEvalTime<>0) then
+                    CheckTimeLimit;
                 end;
               except
                 on e:TExitException do
@@ -2286,32 +2332,6 @@ begin
               if VarIsNull(Result) then
                 Result:=GetP2;
             end
-            {  Deprecated at 2012-02-19
-            else if Func=JEF_IfElse then  //2011-09-22
-            begin
-              v1:=GetP1;
-              if VarType(v1)=varBoolean then
-                if Boolean(v1) then
-                  Result:=GetP2
-                else if ParamCnt>2 then
-                begin
-                  i:=3;
-                  while i<ParamCnt do
-                  begin
-                    v1:=GetPN(i);
-                    if VarType(v1)=varBoolean then
-                      if Boolean(v1) then
-                      begin
-                        Result:=GetPN(i+1);
-                        break;
-                      end;
-                    Inc(i,2);
-                  end;
-                  //最后一个ELSE
-                  if (i=ParamCnt) and VarIsNull(Result) then
-                    Result:=GetPN(i);
-                end;
-            end}
             else
               Done:=false;
           'R':
@@ -2332,6 +2352,8 @@ begin
                         continue;
                     end;
                   end;
+                  if (FTimeLimitConfirm>0) and (FStartEvalTime<>0) then
+                    CheckTimeLimit;
                 until VarEqual(GetP2,true);
               except
                 on e:TExitException do
@@ -2493,6 +2515,8 @@ begin
                         continue;
                     end;
                   end;
+                  if (FTimeLimitConfirm>0) and (FStartEvalTime<>0) then
+                    CheckTimeLimit;
                 end;
               except
                 on e:TExitException do
@@ -4172,6 +4196,15 @@ begin
   Result:=LastExprType;
 end;
 
+procedure TJSONExprParser.InitForEval(EnableTimeLimit: Boolean);
+begin
+  if EnableTimeLimit then
+    FStartEvalTime:=Now
+  else
+    FStartEvalTime:=0;
+  FLastConfirmTime:=0;
+end;
+
 function TJSONExprParser.JSONToExpr(AObj: TJSONObj; ParentOpRank: Integer): String;
 var
   Func:String;
@@ -4436,6 +4469,11 @@ begin
   end;
 end;
 
+procedure TJSONExprParser.SetConfirmFunc(const Value: TConfirmFunc);
+begin
+  FConfirmFunc := Value;
+end;
+
 procedure TJSONExprParser.SetEchoFunc(const Value: TPrintFunc);
 begin
   FEchoFunc := Value;
@@ -4454,6 +4492,11 @@ end;
 procedure TJSONExprParser.SetPrintFunc(const Value: TPrintFunc);
 begin
   FPrintFunc := Value;
+end;
+
+procedure TJSONExprParser.SetTimeLimitConfirm(const Value: Integer);
+begin
+  FTimeLimitConfirm := Value;
 end;
 
 procedure TJSONExprParser.SetTraceOnLine(const Value: Boolean);
@@ -4555,7 +4598,7 @@ end;
 
 class function TJSONExprParser.Version: ShortString;
 begin
-  Result:='0.5.3';
+  Result:='0.5.4';
 end;
 
 function TJSONExprParser.VHEnterObj(const ObjName: String): TJEVarHelper;
